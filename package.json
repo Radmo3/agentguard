@@ -1,0 +1,16 @@
+{
+  "name": "agentguard",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*", "examples"],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/node": "^22.0.0"
+  }
+}
