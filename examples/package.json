@@ -1,0 +1,21 @@
+{
+  "name": "@agentguard/examples",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo": "tsx demo.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@agentguard/api": "0.1.0",
+    "@agentguard/core": "0.1.0",
+    "@agentguard/policy": "0.1.0",
+    "@agentguard/sdk": "0.1.0",
+    "@agentguard/sim-evm": "0.1.0",
+    "@agentguard/sim-solana": "0.1.0",
+    "@solana/spl-token": "^0.4.8",
+    "@solana/web3.js": "^1.95.0",
+    "viem": "^2.21.0"
+  }
+}
