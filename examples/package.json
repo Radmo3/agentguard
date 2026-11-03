@@ -11,6 +11,7 @@
     "@agentguard/api": "0.1.0",
     "@agentguard/core": "0.1.0",
     "@agentguard/policy": "0.1.0",
+    "@agentguard/reputation": "0.1.0",
     "@agentguard/sdk": "0.1.0",
     "@agentguard/sim-evm": "0.1.0",
     "@agentguard/sim-solana": "0.1.0",

@@ -4,6 +4,7 @@ export {
   computeRiskScore,
   aggregateVerdict,
   buildExplanation,
+  safeText,
   type PolicyEngineOptions,
 } from "./engine.js";
 export {
@@ -11,6 +12,7 @@ export {
   finding,
   violationVerdict,
   normalizeAddress,
+  counterparties,
   spentUsd,
   receivedUsd,
   type EvaluateInput,

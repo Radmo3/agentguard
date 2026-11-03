@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
+  "engines": { "node": ">=22" },
   "dependencies": {
     "@agentguard/core": "0.1.0"
   }

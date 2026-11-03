@@ -1,0 +1,5 @@
+{
+  "$comment": "Template for an operator denylist. Copy this file, add entries, and load it with StaticListProvider.fromFiles({ denyFiles: [path] }). Each entry: { chain: 'evm'|'solana', chainId?: number|string (omit = any chain id), address: string, label?: string, tags?: string[], score?: 0..100 }. A denylist entry always yields verdict 'malicious'.",
+  "version": 1,
+  "entries": []
+}

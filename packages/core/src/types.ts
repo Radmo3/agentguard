@@ -32,6 +32,8 @@ export interface ApprovalChange {
   previous: bigint;
   next: bigint;               // 2^256-1 or u64::MAX => unlimited
   unlimited: boolean;
+  /** Whether the spender has code (EVM) / is executable. `undefined` = unknown; `false` = EOA. */
+  spenderIsContract?: boolean;
 }
 
 export interface SimulationResult {
@@ -40,6 +42,14 @@ export interface SimulationResult {
   deltas: AssetDelta[];       // net asset changes for `from`
   approvals: ApprovalChange[];
   contractsTouched: string[]; // addresses / program ids invoked
+  /**
+   * Addresses that receive assets from `from` as decoded by the adapter: ERC-20
+   * transfer/transferFrom `to`, swap recipients, SPL transfer destinations (and their
+   * owners when known), native transfer targets. Policy/behavior/reputation treat
+   * these as counterparties alongside `to` and `contractsTouched`. Optional: older
+   * adapters may omit it.
+   */
+  recipients?: string[];
   newContracts: string[];     // contracts/programs with no prior history (if known)
   gasEstimate?: bigint;
   warnings: string[];         // adapter-level heuristics, e.g. "selfdestruct opcode"
@@ -64,6 +74,7 @@ export type RuleKind =
   | "allowlist_only"
   | "denylist"
   | "no_unlimited_approvals"
+  | "no_eoa_approvals"
   | "max_slippage_bps"
   | "no_new_contracts"
   | "require_simulation_ok"
@@ -117,6 +128,10 @@ export interface AuditRecord {
   decision: Decision;
   context: AgentContext;
   recordedAt: string;
+  /** Who submitted the request (API key identity, correlation id). Optional for legacy records. */
+  principal?: AuditPrincipal;
+  /** Hash-chain + signature metadata. Absent on legacy/unsealed records. */
+  integrity?: AuditIntegrity;
 }
 
 export interface CheckRequest {
@@ -128,4 +143,32 @@ export interface CheckRequest {
 export interface CheckResponse {
   decision: Decision;
   auditId: string;
+}
+
+// ---- Tamper-evident audit (additive; records without `integrity` are legacy/unsealed) ----
+
+/** Hash-chain + optional signature metadata attached to every sealed audit record. */
+export interface AuditIntegrity {
+  /** 0-based position in the chain. */
+  seq: number;
+  /** `hash` of the previous record, or 64 zero hex chars for the genesis record. */
+  prevHash: string;
+  /** sha256 (hex) of the canonical JSON of the record body + `{seq, prevHash}`. */
+  hash: string;
+  /** Algorithm identifier, currently "sha256-v1". */
+  alg: string;
+  /** base64 Ed25519 signature over the hex `hash` (UTF-8), when signing is enabled. */
+  signature?: string;
+  /** Fingerprint (sha256 hex, truncated) of the signing public key. */
+  keyId?: string;
+}
+
+/** Who submitted the request that produced an audit record. */
+export interface AuditPrincipal {
+  /** Identity of the API key (never the key itself). */
+  apiKeyId?: string;
+  /** Server-generated correlation id for the request. */
+  requestId?: string;
+  /** Whether the request carried a valid HMAC signature. */
+  signed?: boolean;
 }

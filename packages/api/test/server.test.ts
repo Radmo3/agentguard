@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { createServer } from "../src/server.js";
 import { InMemoryAuditStore } from "../src/audit.js";
-import { FakeAdapter, FakeEngine, requestBody, testPolicy } from "./fakes.js";
+import { FROM, INTENT_ID, FakeAdapter, FakeEngine, intentId, requestBody, testPolicy } from "./fakes.js";
 
 async function build(opts: Partial<Parameters<typeof createServer>[0]> = {}) {
   const engine = new FakeEngine();
@@ -14,6 +14,7 @@ async function build(opts: Partial<Parameters<typeof createServer>[0]> = {}) {
     policies: new Map([[testPolicy.id, testPolicy]]),
     audit,
     logger: false,
+    rateLimit: false,
     ...opts,
   });
   return { app, engine, evm, audit };
@@ -41,7 +42,7 @@ describe("POST /v1/check", () => {
     expect(built.engine.inputs[0].context.agentId).toBe("agent-A");
 
     const rec = await built.audit.get(body.auditId);
-    expect(rec?.intent.id).toBe("intent-1");
+    expect(rec?.intent.id).toBe(INTENT_ID);
     expect(rec?.decision.verdict).toBe("allow");
   });
 
@@ -50,7 +51,7 @@ describe("POST /v1/check", () => {
     const res = await app.inject({
       method: "POST",
       url: "/v1/check",
-      payload: requestBody({ intent: { id: "x", chain: "evm", from: "0xa", value: "not-a-number" } }),
+      payload: requestBody({ intent: { id: INTENT_ID, chain: "evm", from: FROM, value: "not-a-number" } }),
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe("bad_request");
@@ -59,8 +60,9 @@ describe("POST /v1/check", () => {
 
   it("returns 400 for chains without an adapter", async () => {
     ({ app } = await build());
-    const body = requestBody();
-    (body.intent as Record<string, unknown>).chain = "solana";
+    const body = requestBody({
+      intent: { id: INTENT_ID, chain: "solana", from: "7EqQdEULxWcraVx3mXKFjc84LhCkMGZCkRuDpvcMwJeK", raw: "AAAA" },
+    });
     const res = await app.inject({ method: "POST", url: "/v1/check", payload: body });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe("unsupported_chain");
@@ -123,15 +125,15 @@ describe("audit routes", () => {
     ({ app } = await build());
     for (let i = 0; i < 5; i++) {
       const body = requestBody({ context: { agentId: i % 2 === 0 ? "even" : "odd" } });
-      (body.intent as Record<string, unknown>).id = `intent-${i}`;
+      (body.intent as Record<string, unknown>).id = intentId(i);
       await app.inject({ method: "POST", url: "/v1/check", payload: body });
     }
     const p1 = await app.inject({ method: "GET", url: "/v1/audit?agentId=even&limit=2" });
     expect(p1.statusCode).toBe(200);
-    expect(p1.json().items.map((r: { intent: { id: string } }) => r.intent.id)).toEqual(["intent-4", "intent-2"]);
+    expect(p1.json().items.map((r: { intent: { id: string } }) => r.intent.id)).toEqual([intentId(4), intentId(2)]);
     expect(p1.json().nextCursor).toBe("2");
     const p2 = await app.inject({ method: "GET", url: `/v1/audit?agentId=even&limit=2&cursor=${p1.json().nextCursor}` });
-    expect(p2.json().items.map((r: { intent: { id: string } }) => r.intent.id)).toEqual(["intent-0"]);
+    expect(p2.json().items.map((r: { intent: { id: string } }) => r.intent.id)).toEqual([intentId(0)]);
     expect(p2.json().nextCursor).toBeUndefined();
 
     const all = await app.inject({ method: "GET", url: "/v1/audit" });
@@ -158,7 +160,7 @@ describe("auth + health", () => {
   });
 
   it("skips auth when no keys configured", async () => {
-    ({ app } = await build({ apiKeys: [] }));
+    ({ app } = await build({ apiKeys: [], env: "development" }));
     expect((await app.inject({ method: "POST", url: "/v1/check", payload: requestBody() })).statusCode).toBe(200);
   });
 });

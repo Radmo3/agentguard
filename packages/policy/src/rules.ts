@@ -74,6 +74,20 @@ function strList(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
+/**
+ * Every address the transaction interacts with or sends value to: `to`, contracts
+ * touched, approval spenders and decoded recipients. Used by list-based rules so an
+ * ERC-20 `transfer(denylisted, x)` cannot hide behind a trusted token contract.
+ */
+export function counterparties(intent: TransactionIntent, simulation: SimulationResult, opts: { spenders?: boolean } = {}): string[] {
+  const targets = new Set<string>();
+  if (intent.to) targets.add(intent.to);
+  for (const c of simulation.contractsTouched ?? []) if (typeof c === "string" && c) targets.add(c);
+  for (const r of simulation.recipients ?? []) if (typeof r === "string" && r) targets.add(r);
+  if (opts.spenders !== false) for (const a of simulation.approvals ?? []) if (a?.spender) targets.add(a.spender);
+  return [...targets];
+}
+
 /** Sum of USD outflows (negative deltas) as a positive number. */
 export function spentUsd(sim: SimulationResult): number {
   return sim.deltas.reduce((acc, d) => {
@@ -128,10 +142,7 @@ const allowlistOnly: BuiltinRuleFn = ({ rule, intent, simulation, context }) => 
   const list = new Set(
     [...(context.allowlist ?? []), ...strList(rule.params?.addresses)].map((a) => normalizeAddress(a, chain)),
   );
-  const targets = new Set<string>();
-  if (intent.to) targets.add(intent.to);
-  for (const c of simulation.contractsTouched) targets.add(c);
-  const offenders = [...targets].filter((t) => !list.has(normalizeAddress(t, chain)));
+  const offenders = counterparties(intent, simulation).filter((t) => !list.has(normalizeAddress(t, chain)));
   if (offenders.length > 0) {
     return finding(
       rule,
@@ -148,11 +159,7 @@ const denylist: BuiltinRuleFn = ({ rule, intent, simulation, context }) => {
     [...(context.denylist ?? []), ...strList(rule.params?.addresses)].map((a) => normalizeAddress(a, chain)),
   );
   if (list.size === 0) return null;
-  const targets = new Set<string>();
-  if (intent.to) targets.add(intent.to);
-  for (const c of simulation.contractsTouched) targets.add(c);
-  for (const a of simulation.approvals) targets.add(a.spender);
-  const hits = [...targets].filter((t) => list.has(normalizeAddress(t, chain)));
+  const hits = counterparties(intent, simulation).filter((t) => list.has(normalizeAddress(t, chain)));
   if (hits.length > 0) {
     return finding(rule, `Transaction interacts with denylisted address(es): ${hits.join(", ")}.`, { hits });
   }
@@ -166,6 +173,19 @@ const noUnlimitedApprovals: BuiltinRuleFn = ({ rule, simulation }) => {
       rule,
       `Transaction grants unlimited token approval(s): ${unlimited.map((a) => `${a.token} -> ${a.spender}`).join(", ")}.`,
       { approvals: unlimited.map((a) => ({ token: a.token, spender: a.spender, next: a.next.toString() })) },
+    );
+  }
+  return null;
+};
+
+/** Fires when a non-zero token approval goes to an address with no code (an EOA), which no legitimate protocol needs. */
+const noEoaApprovals: BuiltinRuleFn = ({ rule, simulation }) => {
+  const eoa = simulation.approvals.filter((a) => a.next > 0n && a.spenderIsContract === false);
+  if (eoa.length > 0) {
+    return finding(
+      rule,
+      `Transaction grants token approval(s) to externally-owned account(s), which only a human or a drainer would call: ${eoa.map((a) => `${a.token} -> ${a.spender}`).join(", ")}.`,
+      { approvals: eoa.map((a) => ({ token: a.token, spender: a.spender, next: a.next.toString() })) },
     );
   }
   return null;
@@ -248,6 +268,7 @@ export const builtinRules: Record<RuleKind, BuiltinRuleFn> = {
   allowlist_only: allowlistOnly,
   denylist,
   no_unlimited_approvals: noUnlimitedApprovals,
+  no_eoa_approvals: noEoaApprovals,
   max_slippage_bps: maxSlippageBps,
   no_new_contracts: noNewContracts,
   require_simulation_ok: requireSimulationOk,

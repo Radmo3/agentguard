@@ -4,17 +4,33 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "start": "node dist/main.js"
+    "start": "node dist/main.js",
+    "verify-audit": "tsx scripts/verify-audit.ts"
   },
   "dependencies": {
     "@agentguard/core": "0.1.0",
-    "@fastify/rate-limit": "^10.1.1",
-    "fastify": "^5.1.0",
-    "zod": "^3.23.8"
+    "@fastify/rate-limit": "10.3.0",
+    "fastify": "5.12.8",
+    "pino": "10.4.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@agentguard/policy": "0.1.0",
+    "@agentguard/reputation": "0.1.0",
+    "@agentguard/sim-evm": "0.1.0",
+    "@agentguard/sim-solana": "0.1.0",
+    "@solana/spl-token": "^0.4.8",
+    "@solana/web3.js": "^1.95.0",
+    "viem": "^2.21.0"
   }
 }

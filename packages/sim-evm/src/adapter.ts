@@ -1,5 +1,5 @@
 import {
-  decodeEventLog, decodeFunctionResult, encodeFunctionData, isAddress,
+  decodeEventLog, decodeFunctionResult, encodeFunctionData, isAddress, size,
   type Address, type Hex,
 } from "viem";
 import {
@@ -70,6 +70,7 @@ export class EvmAdapter implements ChainAdapter {
     const deltas: AssetDelta[] = [];
     const approvals: ApprovalChange[] = [];
     const touched = new Set<string>();
+    const recipients = new Set<string>();
     const from = lc(intent.from);
     const to = intent.to ? lc(intent.to) : undefined;
     const value = intent.value ?? 0n;
@@ -77,12 +78,29 @@ export class EvmAdapter implements ChainAdapter {
 
     if (!isAddress(from)) warnings.push(`invalid from address: ${intent.from}`);
     if (to && !isAddress(to)) warnings.push(`invalid to address: ${intent.to}`);
+    if (value < 0n) {
+      // A negative native value has no on-chain meaning; refuse to reason about it.
+      return {
+        ok: false, revertReason: "invalid native value (negative)",
+        deltas: [], approvals: [], contractsTouched: to ? [to] : [], recipients: [], newContracts: [],
+        warnings: ["invalid native value"],
+      };
+    }
     if (to) touched.add(to);
+    // A plain native transfer (or any value-bearing call) makes `to` a recipient of funds.
+    if (to && value > 0n) recipients.add(to);
 
     // ---- 1. calldata decoding -------------------------------------------------
     const decoded = decodeCalldata(data);
     const calldataTokenDeltas: AssetDelta[] = [];
-    await this.applyDecoded(decoded, { from, to, value, warnings, approvals, touched, deltas: calldataTokenDeltas });
+    await this.applyDecoded(decoded, { from, to, value, warnings, approvals, touched, recipients, deltas: calldataTokenDeltas });
+    if (decoded.kind !== "none" && decoded.kind !== "unknown") {
+      const expected = expectedCalldataLength(decoded);
+      const actual = size(data);
+      if (expected !== undefined && actual > expected) {
+        warnings.push(`calldata has ${actual - expected} trailing byte(s) beyond the ABI-encoded arguments`);
+      }
+    }
 
     // ---- 2. target heuristics -------------------------------------------------
     if (to) {
@@ -151,9 +169,10 @@ export class EvmAdapter implements ChainAdapter {
       warnings.push(`high value: ${toDecimal(value, this.nativeDecimals)} native units`);
     }
 
+    recipients.delete(from);
     return {
       ok, revertReason, deltas, approvals,
-      contractsTouched: [...touched], newContracts, gasEstimate,
+      contractsTouched: [...touched], recipients: [...recipients], newContracts, gasEstimate,
       warnings: dedupe(warnings),
       rawTrace: trace?.raw ?? trace,
     };
@@ -161,9 +180,9 @@ export class EvmAdapter implements ChainAdapter {
 
   private async applyDecoded(
     d: DecodedCall,
-    ctx: { from: string; to?: string; value: bigint; warnings: string[]; approvals: ApprovalChange[]; touched: Set<string>; deltas: AssetDelta[] },
+    ctx: { from: string; to?: string; value: bigint; warnings: string[]; approvals: ApprovalChange[]; touched: Set<string>; recipients: Set<string>; deltas: AssetDelta[] },
   ): Promise<void> {
-    const { from, to, warnings, approvals, touched, deltas } = ctx;
+    const { from, to, warnings, approvals, touched, recipients, deltas } = ctx;
     switch (d.kind) {
       case "none":
         return;
@@ -172,10 +191,12 @@ export class EvmAdapter implements ChainAdapter {
         return;
       case "erc20.transfer":
         if (to) deltas.push(await this.delta(to, -d.amount));
+        recipients.add(d.to);
         return;
       case "erc20.transferFrom":
         if (to && d.from === from) deltas.push(await this.delta(to, -d.amount));
         if (to && d.to === from) deltas.push(await this.delta(to, d.amount));
+        if (d.from === from) recipients.add(d.to);
         return;
       case "erc20.approve":
         if (to) approvals.push(await this.approval(to, from, d.spender, d.amount, warnings));
@@ -187,10 +208,11 @@ export class EvmAdapter implements ChainAdapter {
       case "erc721.setApprovalForAll":
         if (to) {
           const next = d.approved ? UINT256_MAX : 0n;
-          approvals.push({ token: to, spender: d.operator, previous: 0n, next, unlimited: d.approved });
+          const spenderIsContract = await this.hasCode(d.operator);
+          approvals.push({ token: to, spender: d.operator, previous: 0n, next, unlimited: d.approved, spenderIsContract });
           if (d.approved) {
             warnings.push(`unlimited approval (setApprovalForAll) of ${to} to ${d.operator}`);
-            if (!(await this.hasCode(d.operator))) warnings.push(`approval to EOA ${d.operator}`);
+            if (!spenderIsContract) warnings.push(`approval to EOA ${d.operator}`);
           }
         }
         return;
@@ -203,6 +225,7 @@ export class EvmAdapter implements ChainAdapter {
         if (d.amountOut === 0n) warnings.push(`swap ${d.name} with zero minimum output (unlimited slippage)`);
         if (d.recipient && d.recipient !== from && d.recipient !== ZERO) {
           warnings.push(`swap recipient ${d.recipient} differs from sender`);
+          recipients.add(d.recipient);
         }
         return;
       }
@@ -222,8 +245,9 @@ export class EvmAdapter implements ChainAdapter {
     } catch { /* best effort */ }
     const unlimited = isUnlimitedApproval(next);
     if (unlimited) warnings.push(`unlimited approval of ${token} to ${spender}`);
-    if (next > 0n && !(await this.hasCode(spender))) warnings.push(`approval to EOA ${spender}`);
-    return { token, spender, previous, next, unlimited };
+    const spenderIsContract = await this.hasCode(spender);
+    if (next > 0n && !spenderIsContract) warnings.push(`approval to EOA ${spender}`);
+    return { token, spender, previous, next, unlimited, spenderIsContract };
   }
 
   private async deltasFromLogs(logs: TraceLog[], from: string, approvals: ApprovalChange[], warnings: string[]): Promise<AssetDelta[]> {
@@ -309,3 +333,23 @@ function collectCalls(t: TraceResult): TraceCall[] {
 }
 
 function dedupe(xs: string[]): string[] { return [...new Set(xs)]; }
+
+/**
+ * Expected byte length (selector + static ABI words) for decoded calls whose
+ * arguments are all static. Returns undefined for dynamic-argument calls (swaps
+ * with path arrays, structs) where the length is not fixed.
+ */
+function expectedCalldataLength(d: DecodedCall): number | undefined {
+  switch (d.kind) {
+    case "erc20.transfer":
+    case "erc20.approve":
+    case "erc721.setApprovalForAll":
+      return 4 + 2 * 32;
+    case "erc20.transferFrom":
+      return 4 + 3 * 32;
+    case "erc20.permit":
+      return 4 + 7 * 32;
+    default:
+      return undefined;
+  }
+}

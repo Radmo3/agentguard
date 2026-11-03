@@ -1,6 +1,7 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AuditRecord } from "@agentguard/core";
+import type { AuditIntegrity, AuditRecord } from "@agentguard/core";
+import { sealRecord, type AuditSigner } from "./integrity.js";
 import { reviveAuditRecord, stringifyWithBigints } from "./serialization.js";
 import type { AuditListQuery, AuditPage, AuditStore } from "./types.js";
 
@@ -16,39 +17,104 @@ function paginate(all: AuditRecord[], query: AuditListQuery): AuditPage {
   return { items, nextCursor: next < filtered.length ? String(next) : undefined };
 }
 
-export class InMemoryAuditStore implements AuditStore {
-  private readonly records: AuditRecord[] = [];
-  private readonly byId = new Map<string, AuditRecord>();
+function sliceRange(all: AuditRecord[], fromSeq: number, toSeq: number): AuditRecord[] {
+  const from = Math.max(0, fromSeq);
+  const to = Math.min(all.length - 1, toSeq);
+  if (to < from) return [];
+  return all.slice(from, to + 1);
+}
 
-  async record(rec: AuditRecord): Promise<void> {
-    this.records.push(rec);
-    this.byId.set(rec.id, rec);
+export interface AuditStoreOptions {
+  /** Ed25519 signer; when set every record carries a signature. */
+  signer?: AuditSigner;
+}
+
+/**
+ * Base for chained stores: every `record()` seals the body onto the chain head
+ * (hash-chained, optionally signed) before it is persisted. Sealing is
+ * serialised through a promise chain so concurrent requests never race for
+ * the same `seq`.
+ */
+abstract class ChainedAuditStore implements AuditStore {
+  protected readonly records: AuditRecord[] = [];
+  protected readonly byId = new Map<string, AuditRecord>();
+  protected head: AuditIntegrity | undefined;
+  private chain: Promise<void> = Promise.resolve();
+
+  constructor(protected readonly opts: AuditStoreOptions = {}) {}
+
+  protected abstract persist(rec: AuditRecord): Promise<void>;
+  protected ensureLoaded(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async record(rec: AuditRecord): Promise<AuditRecord> {
+    await this.ensureLoaded();
+    let sealed!: AuditRecord;
+    const run = this.chain.then(async () => {
+      sealed = sealRecord(rec, this.head, { signer: this.opts.signer });
+      await this.persist(sealed);
+      this.records.push(sealed);
+      this.byId.set(sealed.id, sealed);
+      this.head = sealed.integrity;
+    });
+    // Keep the chain alive even if this append fails; the failure is surfaced to the caller.
+    this.chain = run.catch(() => undefined);
+    await run;
+    return sealed;
   }
 
   async get(id: string): Promise<AuditRecord | undefined> {
+    await this.ensureLoaded();
     return this.byId.get(id);
   }
 
   async list(query: AuditListQuery): Promise<AuditPage> {
+    await this.ensureLoaded();
     return paginate(this.records, query);
+  }
+
+  async range(fromSeq: number, toSeq: number): Promise<AuditRecord[]> {
+    await this.ensureLoaded();
+    return sliceRange(this.records, fromSeq, toSeq);
+  }
+
+  async headIntegrity(): Promise<AuditIntegrity | undefined> {
+    await this.ensureLoaded();
+    return this.head;
   }
 
   get size(): number {
     return this.records.length;
+  }
+
+  get signerKeyId(): string | undefined {
+    return this.opts.signer?.keyId;
+  }
+}
+
+export class InMemoryAuditStore extends ChainedAuditStore {
+  protected async persist(): Promise<void> {
+    /* nothing to do */
   }
 }
 
 /**
  * Append-only JSONL file store. Keeps an in-memory index that is hydrated from
  * the file on first use, so reads are cheap and writes are a single append.
+ * On load the existing chain head is adopted so new records continue the chain;
+ * the file is NOT verified on load (use `GET /v1/audit/verify` or
+ * `scripts/verify-audit.ts`).
  */
-export class JsonlAuditStore implements AuditStore {
-  private readonly records: AuditRecord[] = [];
-  private readonly byId = new Map<string, AuditRecord>();
+export class JsonlAuditStore extends ChainedAuditStore {
   private loaded: Promise<void> | undefined;
-  private writeChain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    opts: AuditStoreOptions = {},
+  ) {
+    super(opts);
+  }
 
   private async load(): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
@@ -65,31 +131,16 @@ export class JsonlAuditStore implements AuditStore {
       const rec = reviveAuditRecord(JSON.parse(trimmed));
       this.records.push(rec);
       this.byId.set(rec.id, rec);
+      if (rec.integrity) this.head = rec.integrity;
     }
   }
 
-  private ensureLoaded(): Promise<void> {
+  protected override ensureLoaded(): Promise<void> {
     if (!this.loaded) this.loaded = this.load();
     return this.loaded;
   }
 
-  async record(rec: AuditRecord): Promise<void> {
-    await this.ensureLoaded();
-    const line = stringifyWithBigints(rec) + "\n";
-    // Serialise appends so concurrent requests never interleave partial lines.
-    this.writeChain = this.writeChain.then(() => appendFile(this.filePath, line, "utf8"));
-    await this.writeChain;
-    this.records.push(rec);
-    this.byId.set(rec.id, rec);
-  }
-
-  async get(id: string): Promise<AuditRecord | undefined> {
-    await this.ensureLoaded();
-    return this.byId.get(id);
-  }
-
-  async list(query: AuditListQuery): Promise<AuditPage> {
-    await this.ensureLoaded();
-    return paginate(this.records, query);
+  protected async persist(rec: AuditRecord): Promise<void> {
+    await appendFile(this.filePath, stringifyWithBigints(rec) + "\n", "utf8");
   }
 }

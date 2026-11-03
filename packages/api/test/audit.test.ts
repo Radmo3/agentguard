@@ -10,7 +10,7 @@ function rec(id: string, agentId: string): AuditRecord {
   return {
     id,
     recordedAt: new Date().toISOString(),
-    intent: { id: `i-${id}`, chain: "evm", from: "0xa", value: 123n, data: "0x00" },
+    intent: { id: `i-${id}`, chain: "evm", from: "0x1111111111111111111111111111111111111111", value: 123n, data: "0x00" },
     context: { agentId, now: new Date("2026-01-01T00:00:00Z") },
     decision: {
       intentId: `i-${id}`,

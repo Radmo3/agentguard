@@ -49,8 +49,11 @@ export function buildExplanation(
 ): string {
   const intent = input.intent;
   const sim = input.simulation;
-  const who = intent ? `Transaction ${intent.id} from ${intent.from}${intent.to ? ` to ${intent.to}` : ""} on ${intent.chain}` : "Transaction";
-  const purpose = intent?.description ? ` ("${intent.description}")` : "";
+  const who = intent ? `Transaction ${safeText(intent.id, 128)} from ${safeText(intent.from, 64)}${intent.to ? ` to ${safeText(intent.to, 64)}` : ""} on ${intent.chain}` : "Transaction";
+  // The description is attacker-controlled text (prompt injection, T2 in the threat
+  // model). It is quoted verbatim-but-escaped and length-capped so it can never
+  // close the quote, inject newlines, or impersonate a finding in the explanation.
+  const purpose = intent?.description ? ` (agent's stated purpose: ${JSON.stringify(safeText(intent.description, 200))})` : "";
   const head = `${who}${purpose} was ${verdict === "allow" ? "allowed" : verdict === "block" ? "blocked" : "escalated for human review"} with risk score ${riskScore}/100.`;
 
   const parts: string[] = [head];
@@ -157,6 +160,12 @@ export class PolicyEngine {
       };
     }
   }
+}
+
+/** Strip control characters (including newlines) and cap length; used on every untrusted string in explanations. */
+export function safeText(v: unknown, max: number): string {
+  const s = String(v ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
+  return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
 function engineErrorFinding(err: unknown, evidence?: Record<string, unknown>): RuleFinding {

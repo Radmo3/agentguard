@@ -21,6 +21,12 @@ export const conservativeDefaultPolicy: PolicySet = {
       description: "Unlimited token approvals are the most common drain vector.",
     },
     {
+      id: "no-eoa-approvals",
+      kind: "no_eoa_approvals",
+      onViolation: "block",
+      description: "Approvals to externally-owned accounts have no legitimate protocol use.",
+    },
+    {
       id: "denylist",
       kind: "denylist",
       onViolation: "block",

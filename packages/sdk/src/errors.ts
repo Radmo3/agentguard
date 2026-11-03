@@ -14,7 +14,15 @@ export class AgentGuardHttpError extends AgentGuardClientError {
     public readonly body: unknown,
     message = `AgentGuard API responded with HTTP ${status}`,
   ) {
-    super(message, status === 401 ? "unauthorized" : status === 400 ? "bad_request" : status >= 500 ? "server_error" : "http_error");
+    super(
+      message,
+      status === 401 ? "unauthorized"
+      : status === 400 ? "bad_request"
+      : status === 413 ? "payload_too_large"
+      : status === 429 ? "rate_limited"
+      : status >= 500 ? "server_error"
+      : "http_error",
+    );
     this.name = "AgentGuardHttpError";
   }
 }
@@ -32,6 +40,14 @@ export class AgentGuardTimeoutError extends AgentGuardNetworkError {
     super(`AgentGuard request timed out after ${timeoutMs}ms`);
     this.name = "AgentGuardTimeoutError";
     (this as { code: string }).code = "timeout";
+  }
+}
+
+/** Server replied 2xx but the body is not a well-formed AgentGuard response. Treated as a failed check. */
+export class AgentGuardProtocolError extends AgentGuardClientError {
+  constructor(message: string) {
+    super(message, "protocol_error");
+    this.name = "AgentGuardProtocolError";
   }
 }
 

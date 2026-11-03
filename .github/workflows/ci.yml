@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -14,8 +17,32 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run build
       - run: npm run typecheck
       - run: npm run test
       - run: npm run demo
+      - name: Production start refuses to run without API keys
+        run: |
+          set +e
+          NODE_ENV=production AGENTGUARD_EVM_RPC_URL=http://127.0.0.1:1 node packages/api/dist/main.js
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then echo "server started in production without keys"; exit 1; fi
+
+  dependency-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Audit production dependencies (high+; reviewed exceptions in .audit-exceptions.json)
+        run: npm audit --omit=dev --audit-level=high || node scripts/audit-exceptions.mjs
+      - name: Audit dev dependencies (report only)
+        run: npm audit --audit-level=high || true
+      - name: Lockfile lint (registry allowlist, https only, integrity hashes)
+        run: node scripts/lockfile-lint.mjs
+      - name: Pinned versions in security-owned packages
+        run: node scripts/check-pinned.mjs packages/api packages/sdk packages/core

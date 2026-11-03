@@ -2,13 +2,21 @@
  * AgentGuard end-to-end demo.
  *
  * Starts the HTTP API in-process with the real policy engine, the conservative
- * default policy, and EVM / Solana adapters backed by in-memory mock RPC clients
- * (no network), then submits four transactions through the SDK client:
+ * default policy extended with the reputation rule, and EVM / Solana adapters
+ * backed by in-memory mock RPC clients (no network), then submits transactions
+ * through the SDK client:
  *
- *   (a) small ERC-20 transfer             -> allow
- *   (b) unlimited ERC-20 approve          -> block
- *   (c) call into an unknown new contract -> escalate
- *   (d) Solana SPL token transfer         -> allow
+ *   (a) small ERC-20 transfer                       -> allow
+ *   (b) unlimited ERC-20 approve                    -> block
+ *   (c) call into an unknown new contract           -> escalate
+ *   (d) Solana SPL token transfer                   -> allow
+ *   (e) bounded ERC-20 approve to an EOA            -> block   (no protocol needs an EOA spender)
+ *   (f) transfer to a denylisted contract           -> block   (contract reputation)
+ *   (g) reputation provider outage                  -> escalate (fail closed)
+ *
+ * The behavioral anomaly layer (`@agentguard/behavior`, separately licensed) is not
+ * part of this repository; when installed it plugs into `createServer` through
+ * `ServerOptions.behavior` and adds the "learned baseline then drain" detection.
  *
  * Run with: npx tsx examples/demo.ts
  */
@@ -22,7 +30,8 @@ import { UINT256_MAX, type AgentContext, type TransactionIntent, type Verdict } 
 import { PolicyEngine, conservativeDefaultPolicy } from "@agentguard/policy";
 import { EvmAdapter, ERC20_ABI, type PublicClientLike } from "@agentguard/sim-evm";
 import { SolanaAdapter, type ConnectionLike } from "@agentguard/sim-solana";
-import { createServer, InMemoryAuditStore } from "@agentguard/api";
+import { ReputationService, StaticListProvider, createReputationRule, type ReputationProvider } from "@agentguard/reputation";
+import { REPUTATION_RULE, createServer, InMemoryAuditStore, withCustomRules } from "@agentguard/api";
 import { AgentGuardClient } from "@agentguard/sdk";
 
 // ---------------------------------------------------------------------------
@@ -33,13 +42,15 @@ const BOB = "0x2222222222222222222222222222222222222222";
 const USDC = "0x3333333333333333333333333333333333333333";
 const ROUTER = "0x4444444444444444444444444444444444444444";
 const NEW_CONTRACT = "0x9999999999999999999999999999999999999999"; // deployed, but never seen before
+const EOA = "0x5555555555555555555555555555555555555555";          // a plain wallet, not a contract
+const DENYLISTED = "0xbad0000000000000000000000000000000000bad";   // on the operator's reputation denylist
 
 const SEL_DECIMALS = encodeFunctionData({ abi: ERC20_ABI, functionName: "decimals" });
 const SEL_SYMBOL = encodeFunctionData({ abi: ERC20_ABI, functionName: "symbol" });
 const SEL_ALLOWANCE = "0xdd62ed3e";
 
 function mockEvmClient(): PublicClientLike {
-  const deployed = new Set([USDC, ROUTER, NEW_CONTRACT]);
+  const deployed = new Set([USDC, ROUTER, NEW_CONTRACT, DENYLISTED]);
   return {
     async call({ data }) {
       const d = data ?? "0x";
@@ -131,7 +142,7 @@ async function main() {
 
   const evm = new EvmAdapter({
     client: mockEvmClient(),
-    knownContracts: new Set([USDC, ROUTER]),
+    knownContracts: new Set([USDC, ROUTER, DENYLISTED]),
     priceOracle,
   });
   const solana = new SolanaAdapter({
@@ -140,12 +151,30 @@ async function main() {
     priceOracle,
   });
 
+  // Contract reputation: bundled trusted seed + operator denylist + a flaky "intel" feed
+  // that we switch off for case (g).
+  let intelDown = false;
+  const intel: ReputationProvider = {
+    name: "intel",
+    async lookup() {
+      if (intelDown) throw new Error("503 Service Unavailable");
+      return { source: "intel", verdict: "unknown", score: 0, tags: [], fetchedAt: new Date().toISOString() };
+    },
+  };
+  const reputation = new ReputationService({
+    providers: [new StaticListProvider({ deny: [{ chain: "evm", address: DENYLISTED, label: "known drainer", tags: ["drainer"] }] }), intel],
+    providerTimeoutMs: 500,
+  });
+  const engine = new PolicyEngine({ customRules: { reputation: createReputationRule(reputation) } });
+  const policy = withCustomRules(conservativeDefaultPolicy, [REPUTATION_RULE]);
+
   const app = await createServer({
-    engine: new PolicyEngine(),
+    engine,
     adapters: { evm, solana },
-    policies: new Map([[conservativeDefaultPolicy.id, conservativeDefaultPolicy]]),
-    defaultPolicyId: conservativeDefaultPolicy.id,
+    policies: new Map([[policy.id, policy]]),
+    defaultPolicyId: policy.id,
     audit: new InMemoryAuditStore(),
+    reputation,
     apiKeys: ["demo-key"],
     logger: false,
   });
@@ -154,12 +183,12 @@ async function main() {
   const client = new AgentGuardClient({ baseUrl, apiKey: "demo-key" });
   const context: AgentContext = { agentId: "demo-agent", spentUsdInWindow: 0, windowSeconds: 3600 };
 
-  const cases: Array<{ name: string; expect: Verdict; intent: TransactionIntent }> = [
+  const cases: Array<{ name: string; expect: Verdict; intent: TransactionIntent; context?: AgentContext; before?: () => void }> = [
     {
       name: "(a) ERC-20 transfer 5 USDC",
       expect: "allow",
       intent: {
-        id: "demo-a", chain: "evm", chainId: 1, from: AGENT, to: USDC,
+        id: "00000000-0000-4000-8000-00000000000a", chain: "evm", chainId: 1, from: AGENT, to: USDC,
         data: encodeFunctionData({ abi: ERC20_ABI, functionName: "transfer", args: [BOB, 5_000_000n] }),
         description: "pay supplier invoice #42",
       },
@@ -168,7 +197,7 @@ async function main() {
       name: "(b) unlimited approve",
       expect: "block",
       intent: {
-        id: "demo-b", chain: "evm", chainId: 1, from: AGENT, to: USDC,
+        id: "00000000-0000-4000-8000-00000000000b", chain: "evm", chainId: 1, from: AGENT, to: USDC,
         data: encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [ROUTER, UINT256_MAX] }),
         description: "approve router before swap",
       },
@@ -177,7 +206,7 @@ async function main() {
       name: "(c) call unknown contract",
       expect: "escalate",
       intent: {
-        id: "demo-c", chain: "evm", chainId: 1, from: AGENT, to: NEW_CONTRACT,
+        id: "00000000-0000-4000-8000-00000000000c", chain: "evm", chainId: 1, from: AGENT, to: NEW_CONTRACT,
         data: "0x4e71d92d", // claim()
         description: "claim airdrop from new contract",
       },
@@ -186,16 +215,48 @@ async function main() {
       name: "(d) Solana SPL transfer 2.5",
       expect: "allow",
       intent: {
-        id: "demo-d", chain: "solana", chainId: "mainnet-beta", from: solAgent.publicKey.toBase58(),
+        id: "00000000-0000-4000-8000-00000000000d", chain: "solana", chainId: "mainnet-beta", from: solAgent.publicKey.toBase58(),
         raw: buildSolanaTx(), description: "pay contractor in USDC",
       },
     },
   ];
 
+  cases.push(
+    {
+      name: "(e) bounded approve to an EOA",
+      expect: "block",
+      intent: {
+        id: "00000000-0000-4000-8000-00000000000e", chain: "evm", chainId: 1, from: AGENT, to: USDC,
+        data: encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [EOA, 50_000_000n] }), // $50: bounded and under the $100 cap
+        description: "let our ops wallet spend up to 50 USDC",
+      },
+    },
+    {
+      name: "(f) transfer to denylisted contract",
+      expect: "block",
+      intent: {
+        id: "00000000-0000-4000-8000-00000000000f", chain: "evm", chainId: 1, from: AGENT, to: USDC,
+        data: encodeFunctionData({ abi: ERC20_ABI, functionName: "transfer", args: [DENYLISTED, 5_000_000n] }),
+        description: "pay invoice #43",
+      },
+    },
+    {
+      name: "(g) reputation provider outage",
+      expect: "escalate",
+      before: () => { intelDown = true; reputation.clearCache(); },
+      intent: {
+        id: "00000000-0000-4000-8000-000000000010", chain: "evm", chainId: 1, from: AGENT, to: USDC,
+        data: encodeFunctionData({ abi: ERC20_ABI, functionName: "transfer", args: [BOB, 5_000_000n] }),
+        description: "pay supplier invoice #44",
+      },
+    },
+  );
+
   const rows: Array<{ case: string; verdict: string; expected: string; riskScore: number; explanation: string }> = [];
   let failures = 0;
   for (const c of cases) {
-    const { decision } = await client.check(c.intent, context);
+    c.before?.();
+    const { decision } = await client.check(c.intent, c.context ?? context);
     const ok = decision.verdict === c.expect;
     if (!ok) failures++;
     rows.push({
@@ -217,7 +278,7 @@ async function main() {
 }
 
 function printTable(rows: Array<{ case: string; verdict: string; expected: string; riskScore: number; explanation: string }>) {
-  const widths = { case: 28, verdict: 10, expected: 9, risk: 5 };
+  const widths = { case: 40, verdict: 10, expected: 9, risk: 5 };
   const pad = (s: string, w: number) => s.padEnd(w).slice(0, w);
   const line = `${pad("case", widths.case)}  ${pad("verdict", widths.verdict)}  ${pad("expected", widths.expected)}  ${pad("risk", widths.risk)}`;
   console.log(line);

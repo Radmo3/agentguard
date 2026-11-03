@@ -1,5 +1,6 @@
 import type {
   AgentContext,
+  AuditIntegrity,
   AuditRecord,
   Chain,
   ChainAdapter,
@@ -8,6 +9,9 @@ import type {
   SimulationResult,
   TransactionIntent,
 } from "@agentguard/core";
+import type { KeyObject } from "node:crypto";
+import type { ApiKeyConfig } from "./auth.js";
+import type { CircuitBreakerOptions } from "./breaker.js";
 
 /**
  * Input to the policy engine, mirroring ARCHITECTURE.md's request flow.
@@ -42,10 +46,74 @@ export interface AuditPage {
 }
 
 export interface AuditStore {
-  record(rec: AuditRecord): Promise<void>;
+  /** Seals (hash-chains, optionally signs) and persists; resolves with the sealed record. */
+  record(rec: AuditRecord): Promise<AuditRecord>;
   get(id: string): Promise<AuditRecord | undefined>;
   /** Newest records first. */
   list(query: AuditListQuery): Promise<AuditPage>;
+  /** Records with `integrity.seq` in [fromSeq, toSeq], in chain order. */
+  range(fromSeq: number, toSeq: number): Promise<AuditRecord[]>;
+  /** Integrity envelope of the latest record, if any. */
+  headIntegrity(): Promise<AuditIntegrity | undefined>;
+}
+
+export interface RequestSigningOptions {
+  /** Reject unsigned requests on mutating routes. Default false (signatures verified when present). */
+  required?: boolean;
+  /** Accepted clock skew / replay window. Default 5 minutes. */
+  windowMs?: number;
+  /** Max nonces retained for replay detection. Default 100k. */
+  nonceCacheSize?: number;
+}
+
+/**
+ * Structural interface for a behavioral profile store (the optional, separately
+ * licensed `@agentguard/behavior` package ships one; any object with this shape works).
+ * Only `get` is needed by the server (to warm the synchronous `peek` the policy rule
+ * reads); the integration's `persist` receives the whole object.
+ */
+export interface BehaviorStoreLike {
+  get(agentId: string): Promise<unknown>;
+  peek?(agentId: string): unknown;
+}
+
+/**
+ * Behavioral anomaly layer, injected and duck-typed so the API never imports the
+ * package that implements it. The server awaits `store.get(agentId)` before
+ * `engine.evaluate` (a failure escalates, never allows) and awaits `persist` after the
+ * audit record is sealed, logging (never propagating) failures.
+ */
+export interface BehaviorIntegration {
+  /** Profile store; `get(agentId)` is awaited before `engine.evaluate` to warm `peek`. */
+  store: BehaviorStoreLike;
+  /** Fold the decision into the agent's baseline. Failure must not change the verdict. */
+  persist: (agentId: string, intent: TransactionIntent, simulation: SimulationResult, decision: Decision, opts: { at?: Date }) => Promise<unknown>;
+}
+
+/**
+ * Synchronous custom rule, structurally identical to `@agentguard/policy`'s
+ * `CustomRuleFn`. Declared loosely here because the API only forwards it to the engine.
+ */
+export type CustomRuleLike = (input: unknown) => unknown;
+
+/**
+ * Contract a behavior package must satisfy for `bootstrap` to load it dynamically:
+ * a single factory export, `createBehaviorIntegration(options)`, returning the store,
+ * the synchronous `behavior` custom rule and the `persist` hook.
+ */
+export interface BehaviorModuleLike {
+  createBehaviorIntegration(options: BehaviorIntegrationOptions): BehaviorIntegration & { rule: CustomRuleLike };
+}
+
+export interface BehaviorIntegrationOptions {
+  /** JSONL file for profiles; undefined => in-memory (lost on restart). */
+  profilePath?: string;
+}
+
+/** Structural subset of `@agentguard/reputation`'s `ReputationService`. */
+export interface ReputationServiceLike {
+  /** Warm the cache for every address the reputation rule will consult. Awaited before `engine.evaluate`. */
+  prefetch(intent: TransactionIntent, simulation?: SimulationResult): Promise<unknown>;
 }
 
 export interface ServerOptions {
@@ -53,12 +121,39 @@ export interface ServerOptions {
   adapters: Partial<Record<Chain, ChainAdapter>>;
   policies: Map<string, PolicySet>;
   audit: AuditStore;
+  /** Behavioral anomaly layer (see `BehaviorIntegration`). Optional; the policy's `behavior` custom rule must be registered on the engine. */
+  behavior?: BehaviorIntegration;
+  /** Contract reputation service (see `ReputationServiceLike`). Optional; the policy's `reputation` custom rule must be registered on the engine. */
+  reputation?: ReputationServiceLike;
   /** Policy used when a request carries no `policyId`. Defaults to the first entry in `policies`. */
   defaultPolicyId?: string;
-  /** Accepted `x-api-key` values. Empty/undefined disables auth (a warning is logged). */
-  apiKeys?: string[];
-  /** Optional rate limiting; omitted = disabled. */
-  rateLimit?: { max: number; timeWindowMs: number };
-  /** Fastify logger option. */
-  logger?: boolean | object;
+  /**
+   * Accepted API keys: raw strings (id derived from fingerprint) or `{ id, key }`.
+   * Keys are hashed on construction and never retained. Empty disables auth,
+   * which is refused when `env` is "production".
+   */
+  apiKeys?: ReadonlyArray<string | ApiKeyConfig>;
+  /** Deployment environment; defaults to process.env.NODE_ENV. "production" enforces hardening. */
+  env?: string;
+  /** HMAC request signing (`x-agentguard-signature`). */
+  signing?: RequestSigningOptions;
+  /**
+   * Rate limiting, per API key (falls back to client IP when unauthenticated).
+   * ON by default (120 req / 60 s). Pass `false` to disable.
+   */
+  rateLimit?: { max: number; timeWindowMs: number } | false;
+  /** Max accepted request body in bytes. Default 64 KiB. */
+  bodyLimit?: number;
+  /** Fastify `trustProxy`. Default false. */
+  trustProxy?: boolean | string | string[] | number;
+  /** CORS allowed origins. Default: CORS disabled (no headers emitted). */
+  cors?: { origins: string[] } | false;
+  /** Circuit breaker applied to every adapter. Pass `false` to disable. */
+  circuitBreaker?: CircuitBreakerOptions | false;
+  /** Public keys (by keyId) used by GET /v1/audit/verify to check signatures. */
+  auditPublicKeys?: ReadonlyMap<string, KeyObject>;
+  /** Pino logger options (`{ level, stream }`), `false` to silence. Defaults to info level. */
+  logger?: boolean | { level?: string; stream?: { write(s: string): unknown }; redactKeys?: readonly string[] };
+  /** Grace period for in-flight requests on close. Default 10 s. */
+  shutdownGraceMs?: number;
 }

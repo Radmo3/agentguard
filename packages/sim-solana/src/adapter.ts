@@ -120,17 +120,42 @@ export class SolanaAdapter implements ChainAdapter {
     }
 
     // ---- 3. instruction-level heuristics + approvals -----------------------------
+    const recipients = new Set<string>();
     let cuLimitCount = 0, cuPriceCount = 0;
     for (const d of decoded) {
       switch (d.kind) {
         case "unknown":
           warnings.push(`unknown program ${d.programId}`);
           break;
-        case "token.setAuthority":
+        case "token.setAuthority": {
           warnings.push(`SetAuthority on ${d.account} (type ${d.authorityType}) -> ${d.newAuthority ?? "none"}`);
+          // Handing ownership of one of the agent's token accounts (or the agent's own
+          // wallet) to someone else transfers the whole balance without a Transfer
+          // instruction ever appearing. Model it as an unlimited approval so
+          // `no_unlimited_approvals` and the behavior/reputation rules all see it.
+          const target = preTokens.get(d.account);
+          const affectsAgent = d.currentAuthority === from || target?.owner === from || d.account === from;
+          if (affectsAgent && d.newAuthority && d.newAuthority !== from) {
+            const mint = target?.mint ?? d.account;
+            approvals.push({ token: mint, spender: d.newAuthority, previous: 0n, next: (1n << 64n) - 1n, unlimited: true });
+            recipients.add(d.newAuthority);
+            warnings.push(`SetAuthority hands control of ${d.account} (agent-owned) to ${d.newAuthority}`);
+          }
           break;
+        }
         case "token.closeAccount":
           warnings.push(`CloseAccount ${d.account} rent -> ${d.destination}`);
+          if (d.destination && d.destination !== from) recipients.add(d.destination);
+          break;
+        case "system.transfer":
+          if (d.from === from && d.to && d.to !== from) recipients.add(d.to);
+          break;
+        case "token.transfer":
+          if (d.owner === from && d.destination) {
+            recipients.add(d.destination);
+            const destOwner = preTokens.get(d.destination)?.owner;
+            if (destOwner && destOwner !== from) recipients.add(destOwner);
+          }
           break;
         case "token.approve": {
           if (d.owner !== from) break;
@@ -242,9 +267,10 @@ export class SolanaAdapter implements ChainAdapter {
     if (priced && outflowUsd >= this.highValueUsd) warnings.push(`high value: ~$${outflowUsd.toFixed(2)} outflow`);
     else if (!priced && nativeOut >= this.highValueLamports) warnings.push(`high value: ${toDecimal(nativeOut, 9)} SOL`);
 
+    recipients.delete(from);
     return {
       ok, revertReason, deltas, approvals,
-      contractsTouched: [...programs], newContracts,
+      contractsTouched: [...programs], recipients: [...recipients], newContracts,
       gasEstimate: sim?.unitsConsumed !== undefined ? BigInt(sim.unitsConsumed) : undefined,
       warnings: [...new Set(warnings)],
       rawTrace: sim ? { logs: sim.logs, err: sim.err, unitsConsumed: sim.unitsConsumed } : undefined,

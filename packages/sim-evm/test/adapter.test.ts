@@ -71,7 +71,7 @@ describe("EvmAdapter", () => {
     const data = encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [SPENDER_EOA, UINT256_MAX] });
     const res = await adapter.simulate({ id: "3", chain: "evm", from: AGENT, to: TOKEN, data });
     expect(res.ok).toBe(true);
-    expect(res.approvals).toEqual([{ token: TOKEN, spender: SPENDER_EOA, previous: 5n, next: UINT256_MAX, unlimited: true }]);
+    expect(res.approvals).toEqual([{ token: TOKEN, spender: SPENDER_EOA, previous: 5n, next: UINT256_MAX, unlimited: true, spenderIsContract: false }]);
     expect(res.warnings).toContain(`unlimited approval of ${TOKEN} to ${SPENDER_EOA}`);
     expect(res.warnings).toContain(`approval to EOA ${SPENDER_EOA}`);
   });

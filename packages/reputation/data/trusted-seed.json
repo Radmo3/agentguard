@@ -1,0 +1,31 @@
+{
+  "$comment": "Bundled seed allowlist of well-known, widely-audited contracts/programs. Entries are scoped by chainId; an entry never matches on another chain. Operators should extend via their own files rather than editing this one.",
+  "version": 1,
+  "entries": [
+    { "chain": "evm", "chainId": 1, "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "label": "USDC (Ethereum)", "tags": ["token", "stablecoin", "erc20"] },
+    { "chain": "evm", "chainId": 1, "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "label": "USDT (Ethereum)", "tags": ["token", "stablecoin", "erc20"] },
+    { "chain": "evm", "chainId": 1, "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "label": "WETH9 (Ethereum)", "tags": ["token", "wrapped-native", "erc20"] },
+    { "chain": "evm", "chainId": 1, "address": "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D", "label": "Uniswap V2 Router02 (Ethereum)", "tags": ["dex", "router", "uniswap-v2"] },
+    { "chain": "evm", "chainId": 1, "address": "0xE592427A0AEce92De3Edee1F18E0157C05861564", "label": "Uniswap V3 SwapRouter (Ethereum)", "tags": ["dex", "router", "uniswap-v3"] },
+    { "chain": "evm", "chainId": 1, "address": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45", "label": "Uniswap V3 SwapRouter02 (Ethereum)", "tags": ["dex", "router", "uniswap-v3"] },
+    { "chain": "evm", "chainId": 1, "address": "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD", "label": "Uniswap Universal Router (Ethereum)", "tags": ["dex", "router", "uniswap-universal"] },
+    { "chain": "evm", "chainId": 1, "address": "0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552", "label": "Safe singleton v1.3.0 (Ethereum)", "tags": ["wallet", "multisig", "safe-singleton"] },
+    { "chain": "evm", "chainId": 1, "address": "0x3E5c63644E683549055b9Be8653de26E0B4CD36E", "label": "Safe L2 singleton v1.3.0 (Ethereum)", "tags": ["wallet", "multisig", "safe-singleton"] },
+    { "chain": "evm", "chainId": 1, "address": "0x41675C099F32341bf84BFc5382aF534df5C7461a", "label": "Safe singleton v1.4.1 (Ethereum)", "tags": ["wallet", "multisig", "safe-singleton"] },
+
+    { "chain": "evm", "chainId": 8453, "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "label": "USDC (Base)", "tags": ["token", "stablecoin", "erc20"] },
+    { "chain": "evm", "chainId": 8453, "address": "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2", "label": "USDT (Base)", "tags": ["token", "stablecoin", "erc20"] },
+    { "chain": "evm", "chainId": 8453, "address": "0x4200000000000000000000000000000000000006", "label": "WETH9 (Base)", "tags": ["token", "wrapped-native", "erc20"] },
+    { "chain": "evm", "chainId": 8453, "address": "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24", "label": "Uniswap V2 Router02 (Base)", "tags": ["dex", "router", "uniswap-v2"] },
+    { "chain": "evm", "chainId": 8453, "address": "0x2626664c2603336E57B271c5C0b26F421741e481", "label": "Uniswap V3 SwapRouter02 (Base)", "tags": ["dex", "router", "uniswap-v3"] },
+    { "chain": "evm", "chainId": 8453, "address": "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD", "label": "Uniswap Universal Router (Base)", "tags": ["dex", "router", "uniswap-universal"] },
+    { "chain": "evm", "chainId": 8453, "address": "0x3E5c63644E683549055b9Be8653de26E0B4CD36E", "label": "Safe L2 singleton v1.3.0 (Base)", "tags": ["wallet", "multisig", "safe-singleton"] },
+    { "chain": "evm", "chainId": 8453, "address": "0x41675C099F32341bf84BFc5382aF534df5C7461a", "label": "Safe singleton v1.4.1 (Base)", "tags": ["wallet", "multisig", "safe-singleton"] },
+
+    { "chain": "solana", "address": "11111111111111111111111111111111", "label": "System Program", "tags": ["native-program", "system"] },
+    { "chain": "solana", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "label": "SPL Token Program", "tags": ["native-program", "spl-token"] },
+    { "chain": "solana", "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "label": "SPL Token-2022 Program", "tags": ["native-program", "spl-token-2022"] },
+    { "chain": "solana", "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", "label": "Associated Token Account Program", "tags": ["native-program", "spl-associated-token"] },
+    { "chain": "solana", "address": "ComputeBudget111111111111111111111111111111", "label": "Compute Budget Program", "tags": ["native-program", "compute-budget"] }
+  ]
+}

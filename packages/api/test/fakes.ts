@@ -47,14 +47,24 @@ export class FakeEngine implements PolicyEngineLike {
   }
 }
 
+export const INTENT_ID = "11111111-1111-4111-8111-111111111111";
+export const FROM = "0x1111111111111111111111111111111111111111";
+export const TO = "0x2222222222222222222222222222222222222222";
+export const SOL_FROM = "7EqQdEULxWcraVx3mXKFjc84LhCkMGZCkRuDpvcMwJeK";
+
+/** Deterministic UUID for the n-th intent in a test. */
+export function intentId(n: number): string {
+  return `11111111-1111-4111-8111-${String(n).padStart(12, "0")}`;
+}
+
 export function requestBody(overrides: Record<string, unknown> = {}) {
   return {
     intent: {
-      id: "intent-1",
+      id: INTENT_ID,
       chain: "evm",
       chainId: 1,
-      from: "0xfrom",
-      to: "0xto",
+      from: FROM,
+      to: TO,
       value: "1000000000000000000",
       data: "0xdeadbeef",
       description: "swap",
