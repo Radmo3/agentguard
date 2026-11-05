@@ -1,15 +1,18 @@
 # AgentGuard
 
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Node 22+](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json) [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)](tsconfig.base.json)
 
 AgentGuard is a transaction guardrail layer for AI agents that hold crypto wallets. Before an agent signs or broadcasts anything, it submits the proposed transaction to AgentGuard, which simulates it against live chain state, evaluates the simulated effects against an operator-defined policy, and returns `allow`, `block` or `escalate` with a human-readable explanation, a 0–100 risk score and an immutable audit record. Agents never get to decide for themselves whether a transaction is safe.
 
 It works on EVM chains and Solana, decodes the usual drain vectors (unlimited approvals, `setApprovalForAll`, permits, swaps with zero minimum output, SetAuthority, interactions with never-seen contracts), and ships with a conservative default policy plus a TypeScript SDK that wraps any signer so that `signTransaction` / `sendTransaction` are checked transparently.
 
+![AgentGuard demo: seven transactions checked through the SDK against the in-process API](docs/demo.gif)
+
 On top of the rule engine, a **contract reputation** layer (`@agentguard/reputation`, in this repo) aggregates allow/deny lists, on-chain heuristics (age, proxy, bytecode size) and optional external intel feeds, and an optional **behavioral anomaly** layer (`@agentguard/behavior`, separately licensed, see [What's open and what's not](#whats-open-and-whats-not)) scores each transaction against the agent's own learned baseline. Both plug into the same pipeline and both fail closed: an outage or an unreadable profile escalates, never allows.
 
 ## What's open and what's not
 
-Everything in this repository is open source: the shared types, the policy engine and default policy, the EVM and Solana simulation adapters, the contract reputation layer, the HTTP API with its tamper-evident audit log, the SDK, the demo and all of the tests.
+Everything in this repository is open source under the [Apache License 2.0](LICENSE): the shared types, the policy engine and default policy, the EVM and Solana simulation adapters, the contract reputation layer, the HTTP API with its tamper-evident audit log, the SDK, the demo and all of the tests.
 
 The **behavioral anomaly layer** is not in this repository. It ships as a separately licensed package, `@agentguard/behavior`, that learns a per-agent baseline (counterparties, amounts, cadence, approvals) from allowed decisions and flags transactions that are out of character for that agent, for example a $95 transfer to a never-paid address from an agent whose history is 30 routine $5 payments, which no static rule catches. It plugs into the open core without any code change here:
 
@@ -236,3 +239,10 @@ Hardening, key handling and the deployment checklist live in [SECURITY.md](SECUR
 - Verified-source / TVL / known-exploit feeds as additional reputation providers (the `HttpProvider` adapter is the integration point); per-tenant baselines shared across agents of the same operator.
 - SOC 2 controls for the hosted service: retention policies, per-tenant audit scoping, signed policy files, response signing (tamper-evident audit log and key rotation shipped in 0.1).
 - Custody integrations: Fireblocks policy-engine hooks and Safe (Gnosis) guard module so AgentGuard sits inline with institutional signing.
+
+## Contributing and license
+
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) (build, test, DCO sign-off) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Vulnerabilities go to the process in [SECURITY.md](SECURITY.md), never to a public issue.
+
+AgentGuard is licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE) for attribution. The `@agentguard/behavior` package is proprietary and is not covered by this license.
+

@@ -12,19 +12,28 @@ packages/
   policy/      chain-agnostic policy engine (rules, evaluation, explanations)
   sim-evm/     EVM adapter: calldata decoding, eth_call simulation, balance/approval diffs (viem)
   sim-solana/  Solana adapter: simulateTransaction, account/token diffs (@solana/web3.js)
-  behavior/    per-agent behavioural baseline (AgentProfile), deterministic anomaly scoring,
-               JSONL/in-memory profile stores with hash-chained event log, `behavior` custom rule
   reputation/  address/contract reputation: providers (static lists, on-chain heuristics, HTTP intel),
                fail-closed aggregation, LRU cache with TTLs, `reputation` custom rule
   api/         Fastify HTTP server exposing POST /v1/check, tamper-evident audit log, bootstrap wiring
   sdk/         TypeScript SDK: `guard(signer)` wrapper + thin HTTP client (HMAC signing)
 examples/      end-to-end demo scripts
+
+(external)
+  @agentguard/behavior   per-agent behavioural baseline, deterministic anomaly scoring,
+                         JSONL/in-memory profile stores with hash-chained event log,
+                         `behavior` custom rule. Separately licensed; NOT in this repo.
 ```
 
-`behavior` and `reputation` depend only on `core`. They expose their rule as a
-plain function with the engine's `CustomRuleFn` shape; `api` injects them
-duck-typed (`ServerOptions.behavior`, `ServerOptions.reputation`) and `bootstrap`
-loads them dynamically, so `api` has no compile-time dependency on either.
+`reputation` (here) and `behavior` (external) depend only on `core`. They expose
+their rule as a plain function with the engine's `CustomRuleFn` shape; `api`
+injects them duck-typed (`ServerOptions.behavior`, `ServerOptions.reputation`) and
+`bootstrap` loads them dynamically, so `api` has no compile-time dependency on
+either. The behavior package is loaded by name (`@agentguard/behavior`, overridable
+via `BootstrapEnv.behaviorModule`) and must export
+`createBehaviorIntegration({ profilePath }) => { store, rule, persist }`
+(`BehaviorModuleLike` in `packages/api/src/types.ts`); when it is not installed
+bootstrap logs a warning and runs without it. `packages/api/test/behavior-stub.ts`
+is a minimal implementation of that contract used by the API tests.
 
 ## Request flow
 
@@ -32,7 +41,7 @@ loads them dynamically, so `api` has no compile-time dependency on either.
 agent → sdk.check(intent) → api POST /v1/check (auth, HMAC, rate limit, strict schema)
       → adapter.simulate(intent) → SimulationResult            (circuit breaker; failure => escalate)
       → await reputation.prefetch(intent, simulation)         (warms the cache; failure => escalate)
-      → await behavior.store.get(context.agentId)             (warms peek();   failure => escalate)
+      → await behavior.store.get(context.agentId)             (if installed; warms peek(); failure => escalate)
       → policyEngine.evaluate({intent, simulation, context, policy}) → Decision
             built-in rules + custom rules "behavior" / "reputation" (synchronous cache reads)
       → audit.record(...)                                       (hash chain + Ed25519; failure => 503)
