@@ -20,7 +20,7 @@ The **behavioral anomaly layer** is not in this repository. It ships as a separa
 - `bootstrap()` / `main.ts` load it dynamically when it is installed: `AGENTGUARD_PROFILE_FILE` selects the JSONL profile store (unset means in-memory), `AGENTGUARD_BEHAVIOR=false` turns the layer off. When the package is not installed the server logs `@agentguard/behavior not installed: behavioral anomaly detection disabled` and runs with the rules in this repo.
 - The contract between the two is the `createBehaviorIntegration()` factory described by `BehaviorModuleLike` in `packages/api/src/types.ts`. The API tests exercise that contract, and the fail-closed behaviour around it, with an in-test stub ([`packages/api/test/behavior-stub.ts`](packages/api/test/behavior-stub.ts)), so you can run the whole suite without the private package. Anything with the same shape (your own anomaly model included) can be plugged in the same way.
 
-Link to the `@agentguard/behavior` package and its licensing terms: to be added.
+The `@agentguard/behavior` package lives at https://github.com/Radmo3/agentguard-behavior (private; contact the maintainers for licensing).
 
 ## Architecture
 
