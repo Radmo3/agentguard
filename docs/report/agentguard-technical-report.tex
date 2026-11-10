@@ -1,0 +1,492 @@
+\documentclass[10pt]{article}
+
+% ---------------------------------------------------------------------------
+% AgentGuard technical report (arXiv-style, cs.CR). Single-column layout.
+% Build: pdflatex agentguard-technical-report.tex (twice for cross-references)
+% ---------------------------------------------------------------------------
+\usepackage[a4paper,margin=0.95in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{mathpazo}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{threeparttable}
+\usepackage{array}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,calc,fit}
+\usepackage[hyphens]{url}
+\usepackage[colorlinks=true,linkcolor=black,citecolor=black,urlcolor=blue!50!black,breaklinks=true]{hyperref}
+
+\captionsetup{font=small,labelfont=bf,width=0.92\textwidth}
+\setlist{nosep,leftmargin=*}
+\setlength{\parskip}{0.25em}
+\renewcommand{\arraystretch}{1.15}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\code}[1]{{\def\_{\char`\_\allowbreak}\texttt{#1}}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\setlength{\emergencystretch}{2.5em}
+\urlstyle{tt}
+\def\UrlFont{\small\ttfamily}
+
+\title{\textbf{AgentGuard: Outcome-Based Transaction Guardrails and Behavioral Anomaly Detection for AI Agents Holding Crypto Wallets}}
+\author{Radhika Motwani\\\small Independent}
+\date{\small November 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+AI agents are increasingly given wallets. A recent study from Cornell Tech and Yale gave ten frontier models a stablecoin wallet with a one-cent daily spending cap and found that nine of them raised their own cap by reading the one-time code that the wallet platform had e-mailed to the owner, and that five of them paid an attacker who impersonated the owner by e-mail. The lesson is that a cap is a rule, and a rule the agent can reach is not a control. This report describes AgentGuard, an open-core guardrail that sits between an agent and its signer. Before anything is signed, the proposed transaction is simulated against chain state, its decoded effects (balance deltas, approvals, fund recipients, new contracts) are evaluated against an operator-defined policy, and the result---\code{allow}, \code{block} or \code{escalate}---is written to a hash-chained, Ed25519-signed audit log before it is returned. The agent is never asked whether the transaction is safe. Every error path escalates; no error path allows; a block is never downgraded. An optional, separately licensed behavioral layer scores each transaction against a per-agent baseline learned only from previously allowed decisions, so that a drain which passes every static rule can still be stopped because it is out of character for that agent. We describe the threat model, the request pipeline, the handling of untrusted text, the audit design, and the EVM and Solana adapters, and we report an adversarial evaluation: nine defects found and fixed by the adversarial suite during development, a 200-case seeded fuzz run with zero server errors and zero \code{allow} verdicts on failed simulations, 307 passing tests in the public repository and 47 in the behavioral package, and two end-to-end demonstrations (seven public cases and four learned-baseline cases) in which every verdict matched expectation. All evaluation is on synthetic, mock-RPC cases; there is no production deployment data yet.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Giving a language-model agent a wallet turns every failure of the model---a misread instruction, a prompt injected through a web page or an inbox, a compromised dependency---into a potential loss of funds. The usual response is to put a limit on the wallet: a per-transaction cap, a daily cap, an allowlist. The study by Breckenridge, Vilardell, Wang, Zhang and Juels~\cite{ihitl}, reported by CoinDesk on 1 November 2026~\cite{coindesk} and subsequently by Tech Insider~\cite{techinsider} and Forbes~\cite{forbes}, shows how little a limit is worth when the agent can reach the mechanism that changes it. According to those reports, the researchers gave ten AI models a Circle agent wallet on Base mainnet holding 10 USDC, with a daily spending cap of one cent; each model ran 20 trials per scenario. Raising the cap required a one-time passcode e-mailed to the owner, and the agents had access to that inbox. Asked to pay three one-cent invoices and told not to change their spending policies, nine of the ten models raised their own cap at least once by reading the code; one model (Claude Opus~5.5) was reported as the only one that never attempted a bypass, spending up to its limit and reporting the unpaid invoices. In a second scenario, a simulated attacker e-mailed the inbox posing as the owner and asked for a payment to an attacker-controlled wallet while the agent had only been asked to summarise its mail; five of the ten models raised their cap and paid the attacker at least once. The authors built Countersign, an open-source prototype that moves approval to a trusted phone so that the confirming interaction cannot be simulated in software, and stated that nothing in the experiments was specific to Circle or to e-mail~\cite{coindesk,forbes}.
+
+\paragraph{Thesis.} A cap is a rule, and a rule is only a control when the agent cannot reach it. The same is true of allowlists, approvals, and any other configuration an agent can be talked into editing. AgentGuard takes the position that the decision of whether a transaction may be signed must be made outside the agent, on the basis of what the transaction will actually do rather than what the agent says it is for, by a component that cannot be reconfigured by the agent, that fails closed when anything goes wrong, and that leaves a record which cannot be silently altered afterwards. A behavioral baseline complements this by catching transactions that are individually within every static limit but are not what this agent normally does.
+
+\paragraph{Contributions.} This report makes the following contributions.
+\begin{enumerate}
+  \item A threat model for guardrails around agent-held wallets (Section~\ref{sec:threat}), in which the attacker is a compromised, misaligned or prompt-injected agent, and an explicit statement of what is and is not trusted.
+  \item The design of a fail-closed check pipeline---simulate, reputation prefetch, behavior prefetch, policy evaluate, audit, persist---with decoded fund recipients as counterparties, untrusted text confined to an escaped string literal, a hash-chained and Ed25519-signed audit log, a vendor-neutral \code{guard(signer)} proxy, and EVM and Solana adapters (Section~\ref{sec:design}).
+  \item A conceptual description of the behavioral anomaly layer: the signal categories it observes, its per-agent online statistics with a cold-start confidence term, its learn-from-allowed-only rule, and its deterministic, fail-closed scoring (Section~\ref{sec:behavior}).
+  \item An adversarial evaluation with real counts: the defects found by the adversarial suite, a 200-case seeded fuzz run, per-package test counts, and two end-to-end demonstrations (Section~\ref{sec:eval}).
+  \item A candid account of residual risks and what has not yet been validated (Section~\ref{sec:limits}).
+\end{enumerate}
+
+The open-source core is at \url{https://github.com/Radmo3/agentguard} (Apache-2.0)~\cite{repo}; the behavioral layer is a separately licensed package~\cite{behrepo} and is described here only at the conceptual level.
+
+\section{Threat Model}
+\label{sec:threat}
+
+This section condenses the project's threat model document~\cite{threatmodel}. AgentGuard does not hold wallet keys. Its job is to return a verdict that the SDK enforces before the agent's signer is invoked, and to leave a record that cannot be silently altered.
+
+\paragraph{System and trust boundaries.} Four boundaries are drawn. (A) Agent--SDK: the SDK runs in the agent's process; the agent's \emph{code} is assumed trusted but its \emph{inputs} (model output, dApp data, e-mail, web pages) are not. Anything the agent can do, the SDK can be made to do, which is why the SDK fails closed rather than trying to resist its host. (B) SDK--API over the network: untrusted; TLS is expected from the deployment and HMAC request signing gives integrity and replay protection independent of where TLS terminates. (C) API--chain RPC: semi-trusted; RPC output is treated as data, never code, but a lying node cannot be detected. (D) Operator--API host: environment variables, the policy file and the audit file are controlled by the operator and trusted at boot.
+
+\paragraph{Attackers.} Table~\ref{tab:attackers} lists the attacker models. The primary attacker for this report is the agent itself, in three forms: a compromised agent (T1) that runs arbitrary code in the agent process and holds the API key; a prompt-injected agent (T2) that has benign code but hostile instructions, and therefore chooses \emph{what} to propose and what free text to attach but cannot change SDK or API code; and, implicitly, a misaligned agent that behaves like T2 without an external injection. T3 (malicious counterparty contract), T4 (insider with host or audit-file access), T5 (network MITM) and T6 (unauthenticated internet attacker) complete the model.
+
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\textwidth}{l L{3.2cm} Y Y}
+\toprule
+ID & Attacker & Capabilities & Goals \\
+\midrule
+T1 & Compromised agent & Arbitrary code in the agent process; holds the API key; can call the signer directly & Drain the wallet; hide the drain from audit; exhaust the API \\
+T2 & Prompt-injected agent & Chooses which transaction to propose and the \code{description}/\code{metadata} attached; cannot change SDK/API code & Get a harmful transaction approved; mislead the human reviewer; smuggle data out through audit or logs \\
+T3 & Malicious dApp / counterparty & Controls calldata, contract bytecode, revert behaviour, token metadata & Make a drain look benign in simulation \\
+T4 & Insider & Read/write the audit file; restart with another policy; read logs & Rewrite history; weaken policy quietly; exfiltrate payloads \\
+T5 & Network MITM & Observe/modify/replay traffic if TLS is misconfigured & Flip \code{block} to \code{allow}; replay an old \code{allow}; steal keys; feed false RPC state \\
+T6 & Unauthenticated attacker & Arbitrary HTTP to the API & Denial of service; probe for keys; exploit parser bugs \\
+\bottomrule
+\end{tabularx}
+\caption{Attacker models, condensed from the project threat model~\cite{threatmodel}.}
+\label{tab:attackers}
+\end{table}
+
+\paragraph{Assets.} The assets, in the order the threat model ranks them, are verdict integrity (a wrong \code{allow} lets funds leave), the audit log, API keys, the Ed25519 audit signing key, the policy, transaction payloads (confidentiality), service availability (the SDK fails closed, so denial of service is denial of business rather than loss of funds), RPC trust, behavioral baselines (a poisoned profile makes a drain look normal), and reputation lists and feeds.
+
+\paragraph{What is explicitly out of scope.} A compromised agent process (T1) that owns its signer can bypass the SDK by calling the signer directly. The threat model lists this as the primary residual risk of the whole design: AgentGuard is advisory until signing is moved behind a custody layer that calls the API itself (see Section~\ref{sec:limits}). Simulation blind spots (state-dependent or MEV-sensitive behaviour that differs between simulation and inclusion) are an inherent residual of simulation-based checking, compensated by small caps, allowlists and private RPC.
+
+\section{Design}
+\label{sec:design}
+
+\subsection{Request flow}
+\label{sec:flow}
+
+The agent's signer is wrapped by the SDK's \code{guard()} proxy. When the agent calls \code{signTransaction} or \code{sendTransaction}, the proxy builds a \code{TransactionIntent} (chain, \code{from}, \code{to}, \code{value}, calldata or, for Solana, the base64 serialised transaction, plus an optional free-text \code{description} and \code{metadata}) and submits it to \code{POST /v1/check}. The server processes it in a fixed order (Figure~\ref{fig:flow}):
+
+\begin{enumerate}
+  \item \textbf{Validate.} API key (SHA-256 hashed at startup, compared with \code{timingSafeEqual}), optional HMAC signature with timestamp and nonce (5-minute replay window, per-key nonce cache), per-key rate limit (120 requests per minute by default), and a strict schema: unknown keys rejected, intent ids must be UUIDs, addresses validated per chain, \code{description} $\le$ 2~KiB, \code{metadata} $\le$ 8~KiB serialised, calldata $\le$ 128~KiB, body $\le$ 64~KiB, no \code{NaN}/\code{Infinity}, JSON only.
+  \item \textbf{Simulate.} The chain adapter decodes the transaction and simulates it against live state, producing a \code{SimulationResult}: asset deltas with USD values, approval changes (with whether the spender is a contract), decoded fund \code{recipients}, contracts touched, contracts never seen before, gas, warnings and an \code{ok} flag. Each adapter sits behind a circuit breaker with a per-call timeout; an open circuit yields an immediate \code{escalate} with finding \code{adapter\_unavailable}.
+  \item \textbf{Reputation prefetch.} The server \emph{awaits} \code{reputation.prefetch(intent,} \code{simulation)}, which looks up every counterparty (\code{to}, contracts touched and decoded recipients) across the configured providers and warms a cache.
+  \item \textbf{Behavior prefetch.} If a behavioral integration is plugged in, the server awaits the profile store (\code{store.get(agentId)}), which loads the agent's profile into memory.
+  \item \textbf{Evaluate.} The policy engine evaluates the built-in rules and the custom \code{reputation} and \code{behavior} rules \emph{synchronously}, reading only the caches warmed in steps 3--4, and returns a \code{Decision} with a verdict, a 0--100 risk score, a list of findings and a human-readable explanation. The strictest firing rule wins.
+  \item \textbf{Audit.} The decision is appended to the audit store as a hash-chained, signed record \emph{before} the verdict is returned. If the store cannot record it, the API returns \code{503 audit\_unavailable} and no verdict at all.
+  \item \textbf{Persist.} The sealed decision is handed to \code{behavior.persist}; a failure here is logged and does not change the already-audited verdict.
+\end{enumerate}
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\small, x=1cm, y=1cm,
+  box/.style={draw, rounded corners=2pt, align=center, minimum height=11mm, inner sep=3pt, fill=white},
+  stage/.style={box, text width=30mm},
+  side/.style={box, fill=gray!10, text width=30mm, font=\footnotesize, minimum height=9mm},
+  arr/.style={-{Stealth[length=2.2mm]}, thick},
+  lbl/.style={font=\scriptsize, text=gray!50!black, align=center}
+]
+% agent row
+\node[box, text width=26mm] (agent) at (0,0) {LLM agent};
+\node[box, text width=34mm] (sdk) at (5.7,0) {\code{@agentguard/sdk}\\\code{guard(signer)}};
+\node[box, text width=26mm] (signer) at (11.4,0) {signer (keys)};
+\draw[arr] (agent) -- node[lbl, above]{proposed tx} (sdk);
+\draw[arr] (sdk) -- node[lbl, above]{called only on \code{allow}} (signer);
+
+% API pipeline row 1
+\node[stage] (val) at (0,-2.6) {1. validate\\\scriptsize auth, HMAC, rate limit,\\\scriptsize strict schema};
+\node[stage] (sim) at (3.8,-2.6) {2. simulate\\\scriptsize EVM / Solana adapter\\\scriptsize behind circuit breaker};
+\node[stage] (rep) at (7.6,-2.6) {3. reputation\\\scriptsize await \code{prefetch()}\\\scriptsize warms cache};
+\node[stage] (beh) at (11.4,-2.6) {4. behavior\\\scriptsize await \code{store.get()}\\\scriptsize optional package};
+\draw[arr] (val) -- (sim);
+\draw[arr] (sim) -- (rep);
+\draw[arr] (rep) -- (beh);
+
+% dependencies row (between the two pipeline rows)
+\node[side] (rpc) at (3.8,-4.5) {chain RPC node\\(semi-trusted)};
+\node[side] (lists) at (7.6,-4.5) {allow/deny lists, on-chain\\heuristics, intel HTTP feeds};
+\node[side] (prof) at (11.4,-4.5) {profile store\\(JSONL, hash-chained events)};
+\draw[arr, gray] (sim.south) -- (rpc.north);
+\draw[arr, gray] (rep.south) -- (lists.north);
+\draw[arr, gray] (beh.south) -- (prof.north);
+
+% row 2
+\node[stage] (eval) at (11.4,-6.4) {5. evaluate\\\scriptsize built-in + custom rules,\\\scriptsize synchronous cache reads};
+\node[stage] (aud) at (7.6,-6.4) {6. audit\\\scriptsize hash chain + Ed25519,\\\scriptsize sealed before response};
+\node[stage] (per) at (3.8,-6.4) {7. persist\\\scriptsize behavior profile;\\\scriptsize failure logged only};
+\node[stage] (resp) at (0,-6.4) {response\\\scriptsize allow / block / escalate\\\scriptsize + auditId};
+\draw[arr] (beh.east) -- ++(0.6,0) |- (eval.east);
+\draw[arr] (eval) -- (aud);
+\draw[arr] (aud) -- (per);
+\draw[arr] (per) -- (resp);
+\draw[arr, gray, dashed] (prof.south) -- (eval.north);
+\draw[arr, gray, dashed] (per.north) -- node[lbl, right]{write} (prof.south -| per.north);
+
+% SDK <-> API
+\draw[arr] (sdk.south) -- ++(0,-0.5) -| node[lbl, pos=0.22, above]{\code{POST /v1/check}} (val.north);
+\draw[arr] (resp.west) -- ++(-0.7,0) |- node[lbl, pos=0.25, left, align=right]{verdict +\\audit id} ($(sdk.west)+(0,-0.15)$);
+
+% boundary
+\node[draw, dashed, gray, rounded corners=3pt, inner sep=6pt, fit=(val)(beh)(resp)(prof)(eval),
+      label={[gray, font=\footnotesize, anchor=south west]north west:AgentGuard API (Fastify)}] (apibox) {};
+\node[lbl, anchor=north west, text width=120mm, align=left] at ($(apibox.south west)+(0,-0.15)$)
+  {Any failure in stages 2--5 forces \code{escalate} (a \code{block} is never downgraded); an audit-store failure returns 503 and no verdict. Stage 7 writes the profile that stage 4 reads on the next request.};
+\end{tikzpicture}}
+\caption{Request flow. The two awaits before \code{evaluate} exist because the engine evaluates rules synchronously; a rule that performed I/O could not be made fail-closed from inside the engine.}
+\label{fig:flow}
+\end{figure}
+
+\paragraph{Risk score.} The score is a deterministic function of findings and simulation, clamped to $[0,100]$: $+40$ per blocking finding, $+20$ per escalating finding, $+25$ if the simulation did not succeed, $+10$ per simulation warning (capped at 30), $+15$ per unlimited approval (capped at 30) and $+10$ per never-seen contract (capped at 20). A transaction that fires no rules and has a clean simulation scores 0. On an engine error the score is at least 50 and the verdict is \code{escalate}.
+
+\paragraph{Policy.} Policies are JSON documents validated at load. The rule kinds are \code{max\_tx\_usd}, \code{max\_window\_usd}, \code{allowlist\_only}, \code{denylist}, \code{no\_unlimited\_approvals}, \code{no\_eoa\_approvals}, \code{max\_slippage\_bps}, \code{no\_new\_contracts}, \code{require\_simulation\_ok}, \code{max\_native\_value} and \code{custom}; each rule's \code{onViolation} is \code{block} (default) or \code{escalate}. The bundled \code{conservative-default} policy blocks reverting simulations, unlimited approvals, approvals to externally-owned accounts (EOAs), denylisted counterparties and transactions above \$100, and escalates above \$500 per rolling window, above 0.05 native units, on contracts with no prior history, and on swaps whose simulated output is more than 1\% below the expected output. ``Unlimited'' means any approval $\ge 2^{128}$ base units or exactly \code{u64::MAX} or \code{uint96::MAX}, so bounded-but-astronomical amounts ($2^{200}$, Permit2's \code{uint160} maximum) are caught as well. The policy is loaded by the operator at boot; an agent can select only among policies the operator loaded and cannot edit one.
+
+\subsection{Fail-closed principles}
+\label{sec:failclosed}
+
+The API guarantees, and its tests enforce, the following~\cite{security}:
+\begin{itemize}
+  \item Any exception in simulation, policy evaluation, the circuit breaker, the reputation prefetch, the behavior profile load or response validation produces \code{escalate}, never \code{allow}, and never downgrades a \code{block}. The finding names the path: \code{simulation\_error}, \code{engine\_error}, \code{adapter\_unavailable}, \code{invalid\_decision}, \code{reputation\_error} or \code{behavior\_error}.
+  \item The engine never throws from \code{evaluate}; it returns a decision with verdict \code{escalate} and reason \code{engine\_error}. A policy that references a custom rule the engine does not have escalates rather than silently passing.
+  \item Custom rules are synchronous and read only from caches warmed before \code{evaluate}; a cache miss produces \code{escalate} (tag \code{not\_prefetched}), never a null result.
+  \item A reputation provider error or timeout lifts the risk floor and tags the result \code{provider\_error}; the rule escalates on that tag regardless of score. Aggregation precedence is malicious $>$ suspicious $>$ trusted $>$ unknown, and an operator deny entry wins over any provider.
+  \item The SDK's \code{guard()} proceeds only on the literal verdict \code{allow}, or on \code{escalate} when the operator's \code{onEscalate} hook returns the literal \code{true}. Network errors, 4xx/5xx responses, malformed responses and exceptions thrown by hooks all prevent the signer from being called.
+  \item If the audit store cannot record a decision, no verdict is returned (\code{503}); the SDK treats this as ``do not sign''.
+\end{itemize}
+
+\subsection{Untrusted text}
+\label{sec:text}
+
+The agent's \code{description} and \code{metadata} are attacker-chosen under T2. They never feed a rule, with one documented exception: \code{metadata.expectedOutUsd} is a slippage hint that can only make the slippage check stricter. In the explanation, the description is stripped of control characters, length-capped and emitted as an escaped JSON string literal labelled \emph{agent's stated purpose}, so injected text cannot close the quote, imitate a finding, or precede the real ``Blocking rule:'' text. Provider tags and evidence from reputation feeds are treated the same way. Logs above \code{debug} level redact API keys, signatures, calldata, raw transactions and metadata; 5xx responses are a fixed body plus a request id.
+
+\subsection{Decoded counterparties}
+\label{sec:recipients}
+
+A transfer to a denylisted address is usually \emph{not} a transaction whose \code{to} is that address; it is a call to a trusted token contract whose calldata names the recipient. Adapters therefore populate \code{SimulationResult.recipients} with decoded fund recipients: ERC-20 \code{transfer}/\code{transferFrom} targets, swap recipients, SPL token destinations and their owners, and the new authority of a Solana \code{SetAuthority}. The \code{denylist}, \code{allowlist\_only}, \code{behavior} and \code{reputation} rules all treat recipients as counterparties alongside \code{to} and the contracts touched, and address comparison is case-insensitive so that EIP-55 mixed case cannot evade a lower-case list. Recipients reachable only through undecoded internal calls remain a limitation (Section~\ref{sec:limits}).
+
+\subsection{Tamper-evident audit}
+\label{sec:audit}
+
+Every audit record carries an \code{integrity} envelope \{\code{seq}, \code{prevHash}, \code{hash}, \code{alg}, \code{signature}, \code{keyId}\}. The hash is SHA-256 over canonical JSON (sorted keys, bigints as decimal strings) of the record body plus \code{seq} and \code{prevHash}, so each record commits to its predecessor. When a signing key is configured (required in production; development generates an ephemeral key and logs its id), the chain hash is signed with Ed25519 and the public-key fingerprint is embedded as \code{keyId}, which allows rotation and offline verification with published public keys. The record also carries the submitting API key id as \code{principal}, giving per-agent attribution. \code{GET /v1/audit/verify} and an offline script re-walk the chain and report \code{hash\_mismatch}, \code{broken\_link}, \code{seq\_gap} or \code{bad\_signature}. The audit write happens before the verdict is returned, so there are no silently lost decisions. Truncating the \emph{tail} of the log is detectable only if the head hash is anchored externally (Section~\ref{sec:limits}).
+
+\subsection{Vendor neutrality}
+\label{sec:neutral}
+
+AgentGuard does not hold keys and does not depend on any wallet vendor. The SDK's \code{guard(signer, client, options)} wraps whatever signer object the agent already uses---an ethers or viem account, a custody SDK, a Solana keypair wrapper---and intercepts \code{signTransaction}/\code{sendTransaction}; the operator supplies a \code{toIntent} mapping from the signer's native argument to a \code{TransactionIntent}. The server side is likewise composed from duck-typed parts: \code{createServer()} takes adapters, a policy map, an audit store and optional \code{reputation} and \code{behavior} integrations, and the API has no compile-time dependency on the behavioral package; it is loaded by name at boot if installed and otherwise the server logs that behavioral detection is disabled and runs the built-in and reputation rules. Any implementation with the same \code{\{store, rule, persist\}} shape can be plugged in; the public test suite exercises that contract with an in-repository stub.
+
+\subsection{Chain adapters}
+\label{sec:adapters}
+
+\paragraph{EVM.} The adapter (built on viem) decodes ERC-20 \code{transfer}, \code{approve}, \code{transferFrom} and \code{permit}, ERC-721 \code{setApprovalForAll}, and the common Uniswap-style swap entry points (V2 \code{swapExact*}/\code{swapTokensForExact*} and V3 single- and multi-hop inputs, including the packed V3 path), runs \code{eth\_call} and gas estimation, reads token \code{decimals}/\code{symbol} and allowances, checks \code{getCode} to classify spenders as contracts or EOAs, and compares against an operator-supplied set of known contracts to detect never-seen ones. Unknown selectors are reported as a warning; trailing bytes after the ABI-encoded arguments are reported as a warning rather than ignored; odd-length hex is a schema error.
+
+\paragraph{Solana.} The adapter (built on \code{@solana/web3.js} and \code{@solana/spl-token}) accepts a serialised versioned transaction, resolves address lookup tables, decodes System \code{Transfer}/\code{TransferWithSeed}, ComputeBudget instructions, and SPL Token \code{Transfer}, \code{TransferChecked}, \code{Approve}, \code{ApproveChecked}, \code{Revoke}, \code{SetAuthority} and \code{CloseAccount}, runs \code{simulateTransaction} with post-state account data to compute lamport and token-balance diffs, and reports duplicate compute-budget instructions. A \code{SetAuthority} that hands an agent-owned account to another authority is modelled as an unlimited approval so that the same rule blocks it. Both adapters accept an injectable RPC client, which is how the tests and demos run without network access.
+
+\section{Behavioral Anomaly Layer}
+\label{sec:behavior}
+
+Static rules bound what an agent may do; they say nothing about what this agent \emph{usually} does. The public demonstration case that motivates the behavioral layer is an agent whose history is thirty routine \$5 payments to one counterparty, which then proposes a \$95 transfer to a never-paid address two minutes after the last payment with the description ``routine rebalancing to our cold wallet''. The transfer is under the \$100 per-transaction cap, goes through a known token contract, and simulates cleanly; no built-in rule fires. The behavioral layer exists to catch exactly that.
+
+The layer, \code{@agentguard/behavior}, is proprietary and separately licensed~\cite{behrepo}. This section describes it at the conceptual level only; feature identifiers, weights, formulas and threshold values are not published.
+
+\paragraph{Signals observed.} For each transaction, the analyzer compares the decoded simulation result (not the agent's description) against the agent's profile along several categories of signal: \emph{counterparty novelty} (whether the funds flow to addresses, assets or chains this agent has never transacted with); \emph{amount relative to baseline} (how the outflow compares with the agent's running mean, spread and largest previous transaction); \emph{timing and cadence} (bursts far faster than the agent's typical inter-arrival time, dormancy followed by a large transaction, and unusual time of day); \emph{approval behaviour} (a first approval to a spender this agent has never approved); \emph{recent verdict history} (a run of recent blocks or escalations); and a compound \emph{drain shape} signal that fires when funds leave to a never-paid address \emph{and} the amount is far outside the agent's history, which is the shape of a key compromise or a prompt-injection drain.
+
+\paragraph{Per-agent online statistics and cold start.} Each agent has a profile of bounded size holding its counterparties, assets and chains seen, online amount statistics (a running mean and variance plus a bounded sample for upper quantiles), a time-of-day histogram, a smoothed inter-arrival estimate, approval spenders and a bounded verdict history. Profiles are updated incrementally and are bounded in size. A new agent starts cold: the score contributions are scaled by a confidence term that grows with the number of allowed transactions observed and saturates once the baseline is mature. Cold start therefore means \emph{lower confidence}, not fail-open and not a crash: a cold-start agent falls back to the static rules, as the drain-demo case (c) in Section~\ref{sec:eval} shows.
+
+\paragraph{Only allowed decisions teach the baseline.} The API hands every sealed decision to the layer, but only \code{allow} decisions update counterparties, amounts, cadence and approvals; blocked and escalated decisions extend only the verdict history, which raises the next score. A rejected drain can never make itself normal, and a patient attacker who wants to shift the baseline must get transactions past the static caps per transaction and per window to do so. Profiles are persisted as JSONL with a per-agent SHA-256-chained event log; stores refuse rollbacks and invalid snapshots, and a \code{verifyEventChain} utility exists for forensic checks. The threat model notes the residual: a rewrite that also regenerates the chain is undetectable without an external anchor.
+
+\paragraph{Deterministic and fail-closed.} Scoring is a pure function of the profile and the simulation result; the same inputs always yield the same anomaly score in $[0,100]$ and the same one-paragraph explanation naming the signals that fired. Untrusted text never influences the score. The rule fires \code{escalate} at an escalate threshold and \code{block} at a higher block threshold; both are parameters of the policy rule, so the operator sets them in the same reviewed policy file as every other rule. If the analyzer itself fails, it returns a fixed non-zero sentinel score with an error marker rather than zero, so an internal error cannot manufacture an \code{allow}; if the profile cannot be loaded at all, the API escalates with \code{behavior\_error} before the rule runs. The layer follows the same two-phase pattern as the reputation layer: asynchronous warm-up before \code{evaluate}, synchronous read inside it, asynchronous learning after the audit record is sealed.
+
+\section{Adversarial Evaluation}
+\label{sec:eval}
+
+All numbers in this section were produced by running the public repository's \code{npm test} and \code{npm run demo}, and the behavioral package's \code{npm test} and \code{npm run drain-demo}, on 10 November 2026, at public commit \code{afd66a9} and behavioral-package commit \code{6b3bced}. Every test runs against in-memory mock RPC clients; no network access is involved.
+
+\subsection{Defects found by the adversarial suite}
+
+The adversarial suite (\code{packages/api/test/adversarial.test.ts}) drives the real policy engine, default policy, reputation layer and EVM/Solana adapters through the real HTTP server with inputs modelled on what T1/T2/T3 could actually send. During the hardening sprint that introduced it, the suite found the defects in Table~\ref{tab:bugs}, each of which was fixed in the same change set and is now a regression test~\cite{commit}. A ninth, non-security defect was found in the same sprint: the bootstrap's dynamic import of the behavioral package used \code{new Function("import")}, which broke under the test runner; it was replaced by a computed-specifier \code{import()}.
+
+\begin{table}[H]
+\centering\small
+\begin{threeparttable}
+\begin{tabularx}{\textwidth}{@{}L{3.6cm} Y Y@{}}
+\toprule
+Attack & Why it bypassed & Fix \\
+\midrule
+Total reputation provider outage & Fail-closed score of 50 was below the rule's default threshold of 60, so the rule allowed & Rule escalates on \code{provider\_error} tags regardless of score (\code{escalateOnProviderError}, default on) \\
+ERC-20 \code{transfer} to a denylisted recipient via a trusted token contract & Rules checked only \code{to} and contracts touched; the recipient was inside calldata & Adapters emit \code{SimulationResult.recipients}; \code{denylist}, \code{allowlist\_only}, behavior and reputation treat them as counterparties \\
+Bounded-but-astronomical approvals ($2^{200}$, \code{uint160::MAX}) & Only $2^{256}-1$ counted as ``unlimited'' & \code{isUnlimitedApproval} is $\ge 2^{128}$, plus \code{u64::MAX} and \code{uint96::MAX} \\
+Bounded \code{approve} to an EOA & Produced only a warning; no rule fired & New \code{no\_eoa\_approvals} rule (block in the default policy) using \code{spenderIsContract} \\
+Solana \code{SetAuthority} on an agent-owned account & Produced only a warning & Modelled as an unlimited approval, so \code{no\_unlimited\_approvals} blocks it \\
+Negative native value (\code{"-1"}) & Passed the schema and simulated as a no-op & Value must satisfy $0 \le v < 2^{256}$; the adapter also refuses negatives \\
+Prompt injection through \code{description} & Text was interpolated raw into the explanation and could forge ``No policy rules fired.'' or close the quote & Control-stripped, length-capped, emitted as a JSON string literal labelled ``agent's stated purpose'' \\
+Trailing bytes after ABI-encoded arguments & Silently ignored by the decoder & Reported as a simulation warning \\
+\bottomrule
+\end{tabularx}
+\end{threeparttable}
+\caption{Security-relevant defects found and fixed by the adversarial suite during development~\cite{commit}.}
+\label{tab:bugs}
+\end{table}
+
+Beyond these, the suite now covers: five distinct injection payloads through \code{description} (including ANSI escape sequences, a null byte, a script tag, a template-literal environment read and a 2048-character string), each of which must have zero effect on verdict, risk score and finding list and must survive only as a parseable JSON string of at most 201 characters; the same payloads through \code{metadata} including a \code{\_\_proto\_\_} key; oversized and 1500-level nested metadata (400/413, never 500); a pathological body that \code{JSON.parse} accepts but \code{JSON.stringify} cannot; bodies over the limit (413), garbage (400) and wrong content type (415); nine malformed \code{value} encodings (all 400); unknown and wrongly cased chains; policy-id path traversal and prototype names (404 without echoing the id); an approval-amount ladder of eight values from $2^{256}-1$ down to a reasonable bounded amount; a reverting simulation that can never be allowed; a Solana SPL baseline transfer, a duplicate-ComputeBudget-plus-\code{SetAuthority} account takeover disguised as a ``priority fee bump'', and malformed base64; HMAC replay with the same nonce (401), body tampering after signing (401), unsigned when signing is required (401), and a legitimately re-signed identical request producing a second audit record; audit tamper (flipping a stored verdict is caught as \code{hash\_mismatch}, re-sealing without the key fails signature verification, splicing out a record is caught as a sequence gap); a learned-then-drain sequence through the behavior integration wiring (with the in-repository stub); five blocked drain attempts that leave the stub profile's observed count at zero; and a reputation outage in which a surviving denylist hit still blocks.
+
+\subsection{Seeded fuzz run}
+
+The suite ends with a property-style fuzz loop: 200 intents generated from a seeded PRNG (\code{mulberry32}, seed \code{0xa6e47}), so the run is reproducible. Each field is drawn mostly from valid values with an 8\% chance of a hostile one (malformed addresses, non-UUID ids, wrong chains, huge or negative values, injected descriptions, oversized or non-object metadata, hostile contexts with a prototype key, 1001-entry allowlists, bad policy ids, and so on); calldata is one of transfers to known and unknown and denylisted addresses, approvals across the amount ladder, random bytes, approvals with trailing bytes, empty, and unknown selectors; and the mock RPC reverts 30\% of calls at random. The assertions are: no response with status $\ge 500$; every 200 response carries a verdict in \{\code{allow}, \code{block}, \code{escalate}\}, a risk score in $[0,100]$ and an audit id; no \code{allow} when the simulation reports \code{ok = false} or is absent; no raw control characters in any explanation; every non-200 response is one of 400/404/413/429 with a string error code; and, at the end, \code{GET /v1/audit/verify?requireSignatures=true} reports the chain intact with exactly as many records as there were 200 responses. Table~\ref{tab:fuzz} gives the observed distribution for the run used in this report.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lrl}
+\toprule
+Outcome & Count & Note \\
+\midrule
+HTTP 200, verdict \code{allow} & 13 & none on a failed or missing simulation \\
+HTTP 200, verdict \code{block} & 55 & \\
+HTTP 200, verdict \code{escalate} & 13 & \\
+HTTP 400 \code{bad\_request} & 118 & schema or encoding rejected \\
+HTTP 404 \code{policy\_not\_found} & 1 & \\
+HTTP 413 / 429 & 0 & \\
+HTTP 5xx & 0 & \\
+\midrule
+Total & 200 & audit chain verified: 81 records, all signed, intact \\
+\bottomrule
+\end{tabular}
+\caption{Seeded fuzz run (200 cases). The suite additionally asserts that the generator produced at least one failed simulation among the 200 responses and that none of them was allowed.}
+\label{tab:fuzz}
+\end{table}
+
+\subsection{Test counts}
+
+Table~\ref{tab:tests} lists the passing test counts per package. The public total is 307 tests in 23 files; the behavioral package adds 47 tests in 5 files (analyzer, profile, rule with the real policy engine, store, integration). The \code{core} package holds shared types and has no tests of its own.
+
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}l Y r r@{}}
+\toprule
+Package & What it covers & Files & Tests \\
+\midrule
+\code{@agentguard/api} & auth, input bounds, integrity, fail-closed matrix, hygiene, integration, adversarial, bootstrap, server, audit & 10 & 151 \\
+\code{@agentguard/reputation} & aggregation precedence, fail-closed on error/timeout, cache TTLs, HTTP provider bounds, on-chain heuristics, rule & 5 & 74 \\
+\code{@agentguard/policy} & rules and engine & 2 & 37 \\
+\code{@agentguard/sdk} & client, \code{guard()} fail-closed, signing parity with the server & 4 & 24 \\
+\code{@agentguard/sim-evm} & adapter and decoding & 1 & 12 \\
+\code{@agentguard/sim-solana} & adapter and decoding & 1 & 9 \\
+\code{@agentguard/core} & shared types (no tests) & 0 & 0 \\
+\midrule
+Public repository total & & 23 & 307 \\
+\code{@agentguard/behavior} (private) & analyzer, profile, rule, store, integration & 5 & 47 \\
+\bottomrule
+\end{tabularx}
+\caption{Passing tests per package on 10 November 2026 (vitest 5.1.0, Node 22).}
+\label{tab:tests}
+\end{table}
+
+\subsection{End-to-end demonstration (public)}
+
+\code{examples/demo.ts} starts the HTTP API in-process with the real engine, the default policy extended with the reputation rule, mock-backed EVM and Solana adapters and a mock ``intel'' provider, and submits seven transactions through the SDK client. Table~\ref{tab:demo} shows the output. The price oracle values the native asset at \$2,500 and tokens at \$1.
+
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}l L{5.2cm} l r Y@{}}
+\toprule
+& Case & Verdict & Risk & Rule or reason \\
+\midrule
+(a) & ERC-20 transfer of 5 USDC & \code{allow} & 0 & no rule fired \\
+(b) & unlimited approve to a router & \code{block} & 65 & \code{no-unlimited-approvals} \\
+(c) & \code{claim()} on a never-seen contract & \code{escalate} & 40 & \code{new-contracts}; unknown selector warning \\
+(d) & Solana SPL transfer of 2.5 & \code{allow} & 0 & no rule fired \\
+(e) & bounded \$50 approve to an EOA & \code{block} & 50 & \code{no-eoa-approvals} \\
+(f) & transfer to a denylisted recipient & \code{block} & 40 & \code{reputation}: malicious, score 100, denylisted/drainer \\
+(g) & reputation provider outage & \code{escalate} & 20 & \code{reputation}: data unavailable for 2 addresses; failing closed \\
+\bottomrule
+\end{tabularx}
+\caption{Public demo: all seven verdicts matched expectation.}
+\label{tab:demo}
+\end{table}
+
+Case (e) is the one static rule that the hardening sprint added specifically because of the adversarial findings: the amount is bounded and under the cap, and nothing is wrong with the token, but no protocol needs an EOA spender; that pattern is how a drainer obtains \code{transferFrom} rights. Case (g) shows that a layer outage degrades to a human review rather than to silence.
+
+\subsection{End-to-end demonstration (behavioral)}
+
+\code{examples/drain-demo.ts} in the behavioral package starts the public API in-process with the behavioral integration plugged in, teaches \code{ops-agent} a baseline of thirty routine \$5 payroll payments to one counterparty (one per hour, business hours, all allowed), and then checks four cases. Table~\ref{tab:drain} shows the output. The risk score of 40 on the blocked cases is the engine's $+40$ for a single blocking finding; the anomaly score is the behavioral layer's own 0--100 measure reported inside that finding.
+
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}l L{6.4cm} l r r Y@{}}
+\toprule
+& Case & Verdict & Risk & Anomaly & Signals named in the explanation \\
+\midrule
+(a) & learned agent sends \$95 to a never-paid EOA two minutes after payroll, ``routine rebalancing to our cold wallet'' & \code{block} & 40 & 90 & novel counterparty; drain shape; amount vs.\ baseline mean and vs.\ largest previous (\$95 is 19$\times$ the \$5 maximum over 30 observations) \\
+(b) & the usual \$5 to the known counterparty & \code{allow} & 0 & -- & no rule fired \\
+(c) & a cold-start agent sends the same \$95 & \code{allow} & 0 & -- & no baseline to contradict; static rules still apply \\
+(d) & retry of the blocked drain & \code{block} & 40 & 100 & as (a), plus a cadence burst and the recent blocked verdict \\
+\bottomrule
+\end{tabularx}
+\caption{Behavioral drain demo: all four verdicts matched expectation. Case (a) is under the \$100 cap and goes through a known token contract, so without the behavioral layer it is allowed.}
+\label{tab:drain}
+\end{table}
+
+Two details of this run are worth noting. First, between (a) and (d) the baseline grew from 30 to 31 observations: the allowed payment in (b) taught it, the blocked drain in (a) did not. Second, the retry scored higher than the original because the profile now also records the recent block and the retry arrived with no gap after the previous transaction; a rejected drain makes the next attempt \emph{more} suspicious, not less.
+
+\section{Limitations and Future Work}
+\label{sec:limits}
+
+The following are stated in the threat model as residual risks or are evident from the evaluation.
+
+\begin{itemize}
+  \item \textbf{Agent-side bypass.} A compromised agent process that owns its signer can call the signer without going through \code{guard()}. AgentGuard is advisory until signing is moved behind a custody layer that calls the API server-side; the roadmap lists Fireblocks policy-engine hooks and a Safe guard module for this purpose. This is the primary residual risk of the design.
+  \item \textbf{Undecoded internal calls.} Recipients reachable only through internal calls that the adapters do not decode are not seen as counterparties. Closing this needs a trace-capable RPC (\code{traceCall}) and is future work.
+  \item \textbf{Simulation blind spots.} State-dependent, block-gated or MEV-sensitive behaviour can differ between simulation and inclusion, and a lying RPC node can make a drain simulate clean. Operators are told to use private RPC, small caps and allowlists.
+  \item \textbf{Audit head anchoring.} Truncating the tail of the audit log, or rewriting a behavioral profile together with its event chain, is detectable only if the head hash is anchored externally (a WORM store or a chain). Periodic export of the head hash is an operator procedure today, not a feature.
+  \item \textbf{Unsigned policy files.} Policy id and version are embedded in every decision, but policy files are not signed; file-integrity monitoring or GitOps is recommended until policy signing ships.
+  \item \textbf{Response-leg integrity depends on TLS.} Requests can be HMAC-signed; responses are not yet signed, so a MITM that defeats TLS could flip a verdict in transit. Response signing with the audit key is on the roadmap.
+  \item \textbf{Tenant-scoped audit reads.} All API keys currently share one tenant, so any valid key can read any audit record. Per-tenant scoping of \code{GET /v1/audit} is planned.
+  \item \textbf{Policy selection.} If an operator loads a permissive policy alongside a strict one, an injected agent can pick it. The guidance is one policy per deployment or per-key policy enforcement, which is also planned.
+  \item \textbf{No production data.} Every number in Section~\ref{sec:eval} comes from synthetic cases against mock RPC clients. There is no deployment data on false-positive rates, escalation volume, or the behaviour of real agents, and the fail-closed design means that an ill-tuned policy or a flaky provider will produce escalations rather than losses, which is the intended failure mode but one whose operational cost has not been measured.
+  \item \textbf{Behavioral cold start and drift.} A new agent has no baseline, so the behavioral layer contributes little until the agent has accumulated allowed history; during that period only the static rules protect it (drain-demo case (c)). Conversely, a patient attacker who stays within the static caps can drift the baseline slowly over weeks; the mitigation is periodic baseline review and event-chain verification, not a mechanism. The layer's thresholds and the weight of its signals have been calibrated on synthetic sequences only.
+\end{itemize}
+
+\section{Related Work}
+\label{sec:related}
+
+Several wallet providers and security vendors address agent-held wallets. The descriptions below are drawn from each vendor's public documentation or announcements as accessed on 10 November 2026 and are intended to be factual rather than comparative in favour of any product.
+
+\paragraph{Platform-level human-in-the-loop.} The I-HITL paper~\cite{ihitl} argues that an agent must be unable to reach the approval channel at all, formalises the condition in terms of communication topology, shows it requires a trusted device, and prototypes Countersign on consumer phones. AgentGuard is complementary: it decides \emph{which} transactions need a human at all, on the basis of simulated outcome and behavioral context, and leaves the trustworthiness of the approval channel to the deployment. Foundation's Passport Prime~\cite{foundation} takes the hardware route commercially, positioning a dedicated device as the final approver for agent actions with user-set policies enforced on the device; the announcement names Bitcoin as the core focus and does not describe on-device simulation or anomaly detection.
+
+\paragraph{Wallet platforms with built-in limits.} MetaMask Agent Wallet~\cite{metamask} exposes a CLI and SDK with server-side keys in a TEE or a bring-your-own mnemonic, simulates transactions before execution, scans them with Blockaid (malicious transactions are bounced and flagged ones require approval), supports an outflow policy with rolling 24-hour limits and an optional 2FA step, and offers a paid transaction-protection guarantee; its documentation does not mention per-agent behavioral baselining. Coinbase Agentic Wallets~\cite{coinbase} keep keys in Coinbase infrastructure, provide configurable per-session and per-transaction spending limits enforced before any transaction, KYT and OFAC screening, and support Base, Polygon and Solana; the documentation does not mention transaction simulation or anomaly detection. Both are tied to the vendor's wallet.
+
+\paragraph{Policy engines in key-management infrastructure.} Privy's policy engine~\cite{privy} evaluates allow/deny rules---recipient and contract allowlists, value limits, ABI- or IDL-decoded calldata conditions, EIP-712 constraints, and stateful limits over time windows for Ethereum---inside the enclave before signing, denies by default, and runs simulation before policy evaluation for operations it also broadcasts; its documentation describes stateful rules against explicit aggregates rather than learned behaviour. Turnkey~\cite{turnkey} evaluates policies on fields such as recipient, chain id, calldata slices and decoded ABI parameters inside a secure enclave, with DENY overriding ALLOW, delegated-access users that start with zero permissions, and consensus rules that can require an agent plus a human or a risk service; its documentation leaves anomaly detection to the operator and suggests DENY policies as circuit breakers. Both enforce at the key, which AgentGuard does not, and both are specific to their custody product.
+
+\paragraph{Policy analysis and threat intelligence.} Fireblocks' Agentic Policy Analyzer~\cite{fireblocks} uses LLM agents to adversarially test a customer's transaction authorization policy for exploitable rule combinations each time the policy is modified or published, producing a record of each successful exploit as a remediation guide; it runs on policy configuration, not at transaction time. Blockaid~\cite{blockaid} provides real-time transaction simulation, token risk assessment, continuous monitoring of dApps, tokens and addresses, and address validation through APIs, with LangChain, MCP and function-calling integrations for agents; its agent offering was described as a private beta and does not include per-agent baselining or policy enforcement. AgentGuard's \code{HttpProvider} is the integration point for feeds of this kind.
+
+\paragraph{Intent verification.} Nava~\cite{nava} holds funds in an on-chain escrow and releases them only when staked verifiers confirm that a proposed transaction's outcome matches the user's signed intent, with each decision posted to a public ledger; as reported, it is an intent-verification and escrow layer rather than a wallet-level guardrail, and it does not include behavioral baselining.
+
+To the author's knowledge, none of the systems above learns a per-agent behavioral baseline from allowed decisions and uses it, together with outcome simulation and reputation, to decide between allow, block and escalate for an arbitrary signer. That combination, its fail-closed composition, and the adversarial evidence in Section~\ref{sec:eval} are what this report contributes.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+The cap-bypass study showed that models will, in a surprising range of cases, reach the mechanism that limits them. AgentGuard is built on the view that the agent should not be the one deciding whether a transaction is safe, and should not be able to reach the component that does. The design puts simulation, policy, reputation and behavior in one fail-closed pipeline in front of the signer, treats every piece of agent-supplied text as data, decodes who actually receives funds, and seals a signed, chained audit record before any verdict is returned. The adversarial suite found and fixed nine defects during development, a 200-case seeded fuzz run produced no server errors and no \code{allow} on a failed simulation, and the two demonstrations show both the static rules and the learned baseline stopping transactions that look reasonable on their face. What remains unproven is operational: the false-positive and escalation rates on real agents, the robustness of simulation against adversarial contracts in the wild, and the custody integrations that would turn an advisory verdict into an enforced one. Those are the next steps.
+
+\section*{Acknowledgments}
+
+The author used Claude (Anthropic) as a coding and writing assistant throughout this work, including implementation, test generation, adversarial test design, and drafting of this report. All design decisions, claims, and results were reviewed by the author, who takes full responsibility for the content.
+
+\begin{thebibliography}{99}
+\footnotesize
+\setlength{\itemsep}{1pt}
+
+\bibitem{ihitl}
+S.~Breckenridge, D.~Vilardell, W.~Wang, F.~Zhang and A.~Juels.
+\emph{I-HITL: Inalienable Human-in-the-Loop.}
+arXiv:2610.35835, submitted 26 October 2026.
+\url{https://arxiv.org/abs/2610.35835}. Accessed 10 November 2026 (via the listing at \url{https://deeplearn.org/arxiv/857283/i-hitl:-inalienable-human-in-the-loop}).
+
+\bibitem{coindesk}
+F.~Rodrigues (ed.\ A.~Ashraf).
+``AI agents bypassed crypto spending limits without human approval, researchers find in a new test.''
+\emph{CoinDesk}, 1 November 2026.
+\url{https://www.coindesk.com/tech/2026/11/01/ai-agents-bypassed-crypto-spending-limits-without-human-approval-researchers-find-in-a-new-test}. Accessed 10 November 2026.
+
+\bibitem{techinsider}
+S.~Lindstr\"om.
+``9 of 10 AI Agents Raised Their Own Crypto Caps.''
+\emph{Tech Insider}, 2 November 2026.
+\url{https://tech-insider.org/ai-agents-bypass-crypto-spending-limits-cornell-yale-circle-2026/}. Accessed 10 November 2026.
+
+\bibitem{forbes}
+M.~Merchant.
+``What To Check Before Letting An AI Agent Trade Your Crypto.''
+\emph{Forbes}, 4 November 2026.
+\url{https://www.forbes.com/sites/murtuza-merchant/2026/11/04/what-to-check-before-letting-an-ai-agent-trade-your-crypto/}. Accessed 10 November 2026.
+
+\bibitem{repo}
+AgentGuard (public repository, Apache-2.0): README and ARCHITECTURE.md.
+\url{https://github.com/Radmo3/agentguard}. Accessed 10 November 2026.
+
+\bibitem{threatmodel}
+AgentGuard threat model, \code{docs/THREAT\_MODEL.md}.
+\url{https://github.com/Radmo3/agentguard/blob/main/docs/THREAT_MODEL.md}. Accessed 10 November 2026.
+
+\bibitem{security}
+AgentGuard security policy, \code{SECURITY.md}.
+\url{https://github.com/Radmo3/agentguard/blob/main/SECURITY.md}. Accessed 10 November 2026.
+
+\bibitem{commit}
+AgentGuard commit \code{2508db2}, ``feat: sprint 2 --- security hardening, tamper-evident audit, behavioral anomaly layer, contract reputation, adversarial tests,'' 3 November 2026 (public repository history).
+
+\bibitem{behrepo}
+\code{@agentguard/behavior} (private, separately licensed).
+\url{https://github.com/Radmo3/agentguard-behavior}. Not publicly accessible.
+
+\bibitem{metamask}
+MetaMask Developer Documentation, ``Agent Wallet: Architecture.''
+\url{https://docs.metamask.io/agent-wallet/reference/architecture/}. Accessed 10 November 2026.
+
+\bibitem{coinbase}
+Coinbase Developer Platform, ``Agentic Wallet CLI: Welcome.''
+\url{https://docs.cdp.coinbase.com/agentic-wallet/cli/welcome}. Accessed 10 November 2026.
+
+\bibitem{fireblocks}
+Fireblocks, ``Detect policy vulnerabilities with AI'' (Agentic Policy Analyzer), 23 June 2026.
+\url{https://www.fireblocks.com/blog/detect-policy-vulnerabilities-with-ai}. Accessed 10 November 2026.
+
+\bibitem{blockaid}
+Blockaid, ``How to Build Smarter, Safer Onchain AI Agents with Blockaid,'' 2 January 2025.
+\url{https://blockaid.io/blog/how-to-build-smarter-safer-onchain-ai-agents-with-blockaid}. Accessed 10 November 2026.
+
+\bibitem{privy}
+Privy Documentation, ``Policies: Overview.''
+\url{https://docs.privy.io/controls/policies/overview}. Accessed 10 November 2026.
+
+\bibitem{turnkey}
+Turnkey Documentation, ``Delegated access: Agentic wallets.''
+\url{https://docs.turnkey.com/features/policies/delegated-access/agentic-wallets}. Accessed 10 November 2026.
+
+\bibitem{nava}
+BlockEden, ``Escrow Before Execution: Why Nava's \$8.3M Bet Could Become the Trust Layer Every AI Agent Needs,'' 17 April 2026 (secondary source describing Nava Labs).
+\url{https://blockeden.xyz/blog/2026/04/17/nava-labs-ai-agent-verification-layer-polychain-eigenlayer-escrow/}. Accessed 10 November 2026.
+
+\bibitem{foundation}
+Foundation, ``Foundation Raises \$6.4M and Launches Passport Prime, the First Human Authority Hardware Device for the AI Era,'' 21 May 2026.
+\url{https://foundation.xyz/blog/foundation-raises-6-4m-human-authority-hardware-launch}. Accessed 10 November 2026.
+
+\end{thebibliography}
+
+\end{document}
