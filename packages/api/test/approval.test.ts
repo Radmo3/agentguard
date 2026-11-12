@@ -503,12 +503,21 @@ describe("approver tooling (the 'trusted device') end to end", () => {
 
     // 3. The device refuses to sign a challenge that does not match the record it is shown.
     const forged = "f".repeat(64);
-    const refused = await execFileP(tsx, [script("approve.ts"), "--key", keyFile, "--key-id", "ops-phone", "--audit-id", r.auditId, "--challenge", forged, "--record", recordFile]).catch((e: { code: number; stderr: string }) => e);
+    const refused = await execFileP(tsx, [script("approve.ts"), "--key", keyFile, "--key-id", "ops-phone", "--audit-id", r.auditId, "--challenge", forged, "--record", recordFile, "--yes"]).catch((e: { code: number; stderr: string }) => e);
     expect(refused.code).toBe(1);
     expect(refused.stderr).toContain("REFUSING TO SIGN");
+    // 3b. Trusted display: it never signs a bare challenge without the record (agent could show a benign one).
+    const bare = await execFileP(tsx, [script("approve.ts"), "--key", keyFile, "--key-id", "ops-phone", "--audit-id", r.auditId, "--challenge", r.approval!.challenge, "--yes"]).catch((e: { code: number; stderr: string }) => e);
+    expect(bare.code).toBe(2);
+    expect(bare.stderr).toContain("REFUSING TO SIGN a bare challenge");
+    // 3c. Without an interactive terminal and without --yes, no human confirmed: refuse.
+    const unconfirmed = await execFileP(tsx, [script("approve.ts"), "--key", keyFile, "--key-id", "ops-phone", "--audit-id", r.auditId, "--record", recordFile]).catch((e: { code: number; stderr: string }) => e);
+    expect(unconfirmed.code).toBe(1);
+    expect(unconfirmed.stderr).toContain("no interactive terminal");
 
     // 4. It signs the genuine one; the output is exactly the POST /v1/approvals body.
-    const signed = await execFileP(tsx, [script("approve.ts"), "--key", keyFile, "--key-id", "ops-phone", "--audit-id", r.auditId, "--challenge", r.approval!.challenge, "--record", recordFile, "--reason", "checked with ops"]);
+    const signed = await execFileP(tsx, [script("approve.ts"), "--key", keyFile, "--key-id", "ops-phone", "--audit-id", r.auditId, "--challenge", r.approval!.challenge, "--record", recordFile, "--reason", "checked with ops", "--yes"]);
+    expect(signed.stderr).toContain("ESCALATED TRANSACTION"); // the device displayed the decoded transaction before signing
     const body = JSON.parse(signed.stdout) as Record<string, unknown>;
     expect(body).toMatchObject({ auditId: r.auditId, keyId: "ops-phone", reason: "checked with ops" });
     const { res } = await approve(app, body);

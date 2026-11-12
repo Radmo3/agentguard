@@ -55,7 +55,7 @@ function main(): void {
   }
   console.log();
   console.log(`# Approve an escalation from this device:`);
-  console.log(`#   npx tsx packages/api/scripts/approve.ts --key ${out ?? "<private-key-file>"} --key-id ${id} --audit-id <auditId> --challenge <challenge> [--url https://agentguard --api-key <approver api key>]`);
+  console.log(`#   npx tsx packages/api/scripts/approve.ts --key ${out ?? "<private-key-file>"} --key-id ${id} --audit-id <auditId> --url https://agentguard --api-key <approver api key>`);
 }
 
 main();
