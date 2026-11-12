@@ -122,8 +122,50 @@ export interface ChainAdapter {
   simulate(intent: TransactionIntent): Promise<SimulationResult>;
 }
 
+/**
+ * What an audit record documents. `check` is a policy decision; `approval` and
+ * `approval_rejected` are the server-verified outcome of a human approval attempt
+ * against an earlier `escalate` check (see `ApprovalAuditData`). Absent = `check`
+ * (records written before approvals existed).
+ */
+export type AuditRecordType = "check" | "approval" | "approval_rejected";
+
+/**
+ * Attached to an `escalate` check record when server-side human approval is
+ * enabled: the challenge a registered approver device must sign. Being inside the
+ * sealed check record, the challenge is bound into the hash chain before the
+ * agent ever sees it.
+ */
+export interface ApprovalRequest {
+  /** sha256 hex of the canonical challenge payload (see `computeApprovalChallenge`). */
+  challenge: string;
+  issuedAt: string;
+  expiresAt: string;
+}
+
+/** Outcome of an approval attempt, carried by `approval` / `approval_rejected` records. */
+export interface ApprovalAuditData {
+  /** `id` of the `check` record this attempt refers to. */
+  checkAuditId: string;
+  /** The challenge presented for signature (as stored server-side for that check). */
+  challenge: string;
+  outcome: "approved" | "rejected";
+  /** Server-generated id of a successful approval. */
+  approvalId?: string;
+  /** Registered approver key that produced a valid signature (approved) or was claimed (rejected). */
+  approverKeyId?: string;
+  /** `approvedAt` as asserted by the device, only on `approved`. */
+  approvedAt?: string;
+  /** Free-text reason supplied by the approver, control-stripped and length-capped. */
+  reason?: string;
+  /** Coarse server-side reason for a rejection (never returned over HTTP; audit only). */
+  rejectionReason?: string;
+}
+
 export interface AuditRecord {
   id: string;
+  /** Record kind; absent means `check` (legacy). */
+  type?: AuditRecordType;
   intent: TransactionIntent;
   decision: Decision;
   context: AgentContext;
@@ -132,6 +174,10 @@ export interface AuditRecord {
   principal?: AuditPrincipal;
   /** Hash-chain + signature metadata. Absent on legacy/unsealed records. */
   integrity?: AuditIntegrity;
+  /** On `escalate` checks: the challenge an approver must sign. */
+  approvalRequest?: ApprovalRequest;
+  /** On `approval` / `approval_rejected` records: what was (not) approved. */
+  approval?: ApprovalAuditData;
 }
 
 export interface CheckRequest {
@@ -143,6 +189,36 @@ export interface CheckRequest {
 export interface CheckResponse {
   decision: Decision;
   auditId: string;
+  /**
+   * Present only when `decision.verdict` is `escalate` and the server has approver
+   * keys registered. The agent cannot do anything with it except hand it to a human:
+   * a registered device signs `challenge` and posts the signature to
+   * `POST /v1/approvals`; the server verifies it and records the approval.
+   */
+  approval?: { challenge: string; expiresAt: string };
+}
+
+/** Body of `POST /v1/approvals`: produced by the trusted approver device, never by the agent. */
+export interface ApprovalSubmission {
+  auditId: string;
+  keyId: string;
+  /** base64 Ed25519 signature over the UTF-8 bytes of the hex challenge. */
+  signature: string;
+  /** ISO timestamp asserted by the device; must fall inside the approval window. */
+  approvedAt: string;
+  reason?: string;
+}
+
+export type ApprovalStatus = "pending" | "approved" | "expired" | "rejected" | "unknown";
+
+/** Body of `GET /v1/approvals/:auditId`. */
+export interface ApprovalStatusResponse {
+  auditId: string;
+  status: ApprovalStatus;
+  expiresAt?: string;
+  approvedBy?: string;
+  approvalId?: string;
+  approvedAt?: string;
 }
 
 // ---- Tamper-evident audit (additive; records without `integrity` are legacy/unsealed) ----
@@ -171,4 +247,9 @@ export interface AuditPrincipal {
   requestId?: string;
   /** Whether the request carried a valid HMAC signature. */
   signed?: boolean;
+  /**
+   * On approval records: the registered approver key whose Ed25519 signature was
+   * verified server-side. Distinct from `apiKeyId` (transport auth) by design.
+   */
+  approverKeyId?: string;
 }

@@ -13,8 +13,10 @@ with that in mind. The threat model lives in [docs/THREAT_MODEL.md](docs/THREAT_
 - Safe harbour: good-faith research against your own deployment, or against the hosted staging environment, will not be pursued legally. Do not test against other customers' tenants or attempt to access data you do not own.
 
 Severity guide (what we treat as Critical): anything that makes the API return
-`allow` for a transaction that policy would otherwise block or escalate; audit
-record forgery or silent deletion; API key or signing key disclosure; remote code execution.
+`allow` for a transaction that policy would otherwise block or escalate; any way
+for a caller without a registered approver private key to obtain an approval for
+an escalated transaction (`POST /v1/approvals`), or to reuse one; audit record
+forgery or silent deletion; API key or signing key disclosure; remote code execution.
 
 ## Supported versions
 
@@ -28,7 +30,8 @@ versions lack the `crypto.subtle`/`timingSafeEqual` behaviour we rely on and are
 
 ## Key handling
 
-AgentGuard has three kinds of secrets. None of them are ever logged above
+AgentGuard has three kinds of secrets, plus one kind of key it deliberately
+never holds (approver private keys). None of them are ever logged above
 `debug` level, returned in error responses, or kept in plaintext in memory
 longer than needed.
 
@@ -53,6 +56,13 @@ longer than needed.
 - Keep the private key in a secrets manager or HSM-backed env injection, never in the policy file or repo. Publish the public key (`AGENTGUARD_AUDIT_PUBLIC_KEYS` accepts extra verification keys for rotation) so auditors can verify exports offline with `packages/api/scripts/verify-audit.ts`.
 - Generate: `node -e "const{generateKeyPairSync}=require('crypto');const k=generateKeyPairSync('ed25519');console.log(k.privateKey.export({type:'pkcs8',format:'pem'}));console.log(k.publicKey.export({type:'spki',format:'pem'}))"`.
 
+### Approver keys (`AGENTGUARD_APPROVER_KEYS`, public halves only)
+
+- Human approval of `escalate` decisions is verified on the server against a registry of Ed25519 **public** keys: `AGENTGUARD_APPROVER_KEYS=ops-phone:<base64 raw 32 bytes>,cfo-yubikey:<base64>` (hex and SPKI PEM also accepted). Generate a pair on the device with `packages/api/scripts/approver-keygen.ts`; the private key never leaves it. The server refuses to start if an entry is malformed, duplicated, or is the audit signing/verification key (key separation).
+- The private key is the human's credential. In production it belongs in a phone keystore, HSM or hardware key; the `approve.ts` CLI on an operator laptop is the minimum. It must not be on the agent host, the AgentGuard host, in CI, or in any secret store the agent can read: an agent that can read it can approve itself, and the guarantee is gone. Rotate by registering the new public key under a new id and removing the old entry; ids are recorded in the audit chain so attribution survives rotation.
+- What the device signs is the challenge: `sha256(canonicalJson({ v:1, auditId, intentHash, decisionHash, policyId, policyVersion, agentId, issuedAt }))`, signed as its UTF-8 hex string. `approve.ts --record` recomputes it from the sealed audit record and refuses to sign a mismatching value. Approvals are single use, expire after `AGENTGUARD_APPROVAL_TTL_MS` (15 min default), tolerate `AGENTGUARD_APPROVAL_CLOCK_SKEW_MS` (60 s) between the device clock and the server, and any invalid attempt burns the challenge. Pending approvals live in server memory: a restart turns them into `unknown` (the SDK treats that as not approved) and a fresh check is required.
+- The agent's API key and the device's API key should be different entries in `AGENTGUARD_API_KEYS` so that `principal.apiKeyId` on an approval record shows the device, not the agent.
+
 ## Deployment hardening checklist
 
 Before exposing an AgentGuard API to agents that control real funds:
@@ -73,6 +83,7 @@ Before exposing an AgentGuard API to agents that control real funds:
 - [ ] Process runs as an unprivileged user with a read-only filesystem except the audit path; no shell in the container image.
 - [ ] Graceful shutdown wired to your orchestrator (SIGTERM; in-flight checks drain for `AGENTGUARD_SHUTDOWN_GRACE_MS`, default 10 s). Never SIGKILL a pod with checks in flight if you can avoid it: the agent will see a network error and (correctly) refuse to sign.
 - [ ] On the agent side: wrap the signer with `guard()`; never give the agent a code path that bypasses it; treat every `AgentGuardClientError` as "do not sign".
+- [ ] `AGENTGUARD_APPROVER_KEYS` registered for every human who may approve an escalation; private keys generated on, and confined to, the approver devices. `guard()` left in its default `approval: "server"` mode; `approval: "callback"` (advisory, in-process `onEscalate`) is not I-HITL and is not acceptable for a signer that controls funds. Alert on `approval rejected` log lines with `bad_signature`/`unregistered_key`: that is someone other than the device trying to approve.
 - [ ] `npm audit --omit=dev --audit-level=high` and `scripts/lockfile-lint.mjs` pass in CI; `.audit-exceptions.json` entries are reviewed before their `until` date.
 - [ ] If you run the external `@agentguard/behavior` package: `AGENTGUARD_PROFILE_FILE` on durable storage with the same protections as the audit file (an attacker who can rewrite a profile can teach the baseline), and verify per-agent event chains with that package's `verifyEventChain` if you suspect tampering.
 - [ ] `AGENTGUARD_REPUTATION_DENYLIST` maintained from your incident process; `AGENTGUARD_REPUTATION_HTTP_URL` points only at feeds you contractually trust, over TLS. Provider outages escalate every check (fail closed), so alert on `provider_error` in findings rather than loosening `failMode`.
@@ -82,6 +93,7 @@ Before exposing an AgentGuard API to agents that control real funds:
 
 - **Fail closed.** Any exception in simulation, policy evaluation, the circuit breaker, the reputation prefetch, the behavior profile load (when a behavior integration is plugged in via `ServerOptions.behavior`) or response validation produces `escalate`, never `allow`, and never downgrades a `block`. If the audit store cannot record a decision the API returns `503 audit_unavailable` and no verdict at all. A behavior-profile write failure after the audit record is sealed is logged and does not alter the verdict. These guarantees live in `packages/api` and hold for any behavior implementation, including the separately licensed `@agentguard/behavior` package and the test stub.
 - **Untrusted text cannot steer a verdict.** `description` and `metadata` never feed a rule (except the documented `metadata.expectedOutUsd` slippage hint, which can only make the check stricter) and reach the explanation only as an escaped, control-character-stripped, length-capped JSON string literal.
+- **Inalienable human approval.** An `escalate` decision becomes an approval only through `POST /v1/approvals` carrying a valid Ed25519 signature, by a key in `AGENTGUARD_APPROVER_KEYS`, over the challenge the server sealed into that check's audit record, inside the window, once. The API key is transport auth only; holding it (as the agent does) gives no way to approve. Every failure is a generic `403` plus an `approval_rejected` audit record; the status route is read-only; the approval is a chained, signed `approval` record whose `principal.approverKeyId` names the device. The service is the verifier, so a compromised AgentGuard host remains a residual (docs/THREAT_MODEL.md, T7).
 - **Tamper evidence.** Every audit record carries `integrity: { seq, prevHash, hash, alg, signature?, keyId? }`. `hash` is SHA-256 over canonical JSON (sorted keys, bigints as strings) of the record plus `seq`/`prevHash`. `GET /v1/audit/verify?from=&to=` and `scripts/verify-audit.ts` re-walk the chain.
 - **No secrets in logs or responses.** `createRedactingLogger` strips api keys, signatures, calldata, raw transactions and metadata from every level above `debug`. 5xx responses are a fixed body plus `requestId`.
 - **Strict input.** Unknown keys rejected, intent ids must be UUIDs, addresses validated per chain, bounded string lengths, no NaN/Infinity, JSON only, 64 KiB bodies.

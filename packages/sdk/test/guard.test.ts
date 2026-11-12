@@ -57,16 +57,17 @@ describe("guard()", () => {
     expect(signer.signTransaction).not.toHaveBeenCalled();
   });
 
-  it("invokes onEscalate; proceeds only when it returns true", async () => {
+  it("advisory mode (approval: \"callback\") invokes onEscalate; proceeds only when it returns true", async () => {
     const signer = makeSigner();
     const { client } = clientWith("escalate");
     const onEscalate = vi.fn(async () => true);
-    const g = guard(signer, client, { toIntent, context: { agentId: "agent" }, onEscalate });
+    const warn = vi.fn();
+    const g = guard(signer, client, { toIntent, context: { agentId: "agent" }, approval: "callback", onEscalate, warn });
     expect(await g.sendTransaction(tx)).toBe("hash:0xdest");
     expect(onEscalate).toHaveBeenCalledOnce();
     expect(onEscalate.mock.calls[0][0]).toMatchObject({ method: "sendTransaction", auditId: "aud-escalate" });
 
-    const g2 = guard(makeSigner(), client, { toIntent, context: { agentId: "agent" }, onEscalate: () => false });
+    const g2 = guard(makeSigner(), client, { toIntent, context: { agentId: "agent" }, approval: "callback", onEscalate: () => false, warn });
     await expect(g2.sendTransaction(tx)).rejects.toBeInstanceOf(GuardEscalatedError);
   });
 

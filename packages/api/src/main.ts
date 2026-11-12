@@ -1,3 +1,4 @@
+import { parseApproverKeysEnv } from "./approvals.js";
 import { InMemoryAuditStore, JsonlAuditStore } from "./audit.js";
 import { parseApiKeysEnv } from "./auth.js";
 import { bootstrap } from "./bootstrap.js";
@@ -76,6 +77,9 @@ async function main(): Promise<void> {
     reputationHttpUrl: env.AGENTGUARD_REPUTATION_HTTP_URL,
   });
 
+  // ---- Human approver keys (I-HITL): public halves only; private keys live on the approver devices ----
+  const approvers = parseApproverKeysEnv(env.AGENTGUARD_APPROVER_KEYS);
+
   const rateMax = envInt("AGENTGUARD_RATE_LIMIT_MAX", 120);
   const corsOrigins = envList("AGENTGUARD_CORS_ORIGINS");
   const trustProxyRaw = env.AGENTGUARD_TRUST_PROXY;
@@ -105,6 +109,8 @@ async function main(): Promise<void> {
       callTimeoutMs: envInt("AGENTGUARD_ADAPTER_TIMEOUT_MS", 15_000),
     },
     auditPublicKeys,
+    approvers,
+    approvals: { ttlMs: envInt("AGENTGUARD_APPROVAL_TTL_MS", 15 * 60_000), clockSkewMs: envInt("AGENTGUARD_APPROVAL_CLOCK_SKEW_MS", 60_000) },
     logger: { level: env.LOG_LEVEL ?? "info" },
     shutdownGraceMs: envInt("AGENTGUARD_SHUTDOWN_GRACE_MS", 10_000),
   });
@@ -112,6 +118,7 @@ async function main(): Promise<void> {
   if (signer) app.log.info({ keyId: signer.keyId }, "audit records are Ed25519-signed");
   else app.log.warn("audit record signing is DISABLED (hash chain only)");
   app.log.info({ apiKeyIds: apiKeys.map((k) => k.id) }, "api keys loaded");
+  app.log.info({ approverKeyIds: approvers.map((k) => k.keyId) }, "approver keys loaded");
 
   let shuttingDown = false;
   const shutdown = async (signal: string) => {

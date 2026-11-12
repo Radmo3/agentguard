@@ -10,6 +10,7 @@ import type {
   TransactionIntent,
 } from "@agentguard/core";
 import type { KeyObject } from "node:crypto";
+import type { ApproverKeyConfig } from "./approvals.js";
 import type { ApiKeyConfig } from "./auth.js";
 import type { CircuitBreakerOptions } from "./breaker.js";
 
@@ -152,6 +153,26 @@ export interface ServerOptions {
   circuitBreaker?: CircuitBreakerOptions | false;
   /** Public keys (by keyId) used by GET /v1/audit/verify to check signatures. */
   auditPublicKeys?: ReadonlyMap<string, KeyObject>;
+  /**
+   * Registered human-approver public keys (Ed25519). An `escalate` decision can
+   * only be turned into an approval by a signature from one of these keys,
+   * verified server-side (`POST /v1/approvals`). They are separate from API keys
+   * (transport auth) and from the audit signing key (server-held); registering a
+   * server-held key here is refused. Empty => escalations carry no challenge and
+   * cannot be approved through the API.
+   */
+  approvers?: ReadonlyArray<ApproverKeyConfig>;
+  /** Approval window and bookkeeping. */
+  approvals?: {
+    /** How long an issued challenge stays approvable. Default 15 minutes. */
+    ttlMs?: number;
+    /** Tolerated difference between the device's `approvedAt` and the server clock. Default 60 s. */
+    clockSkewMs?: number;
+    /** Upper bound on pending approvals held in memory. Default 10k. */
+    maxPending?: number;
+    /** Clock (tests). */
+    now?: () => number;
+  };
   /** Pino logger options (`{ level, stream }`), `false` to silence. Defaults to info level. */
   logger?: boolean | { level?: string; stream?: { write(s: string): unknown }; redactKeys?: readonly string[] };
   /** Grace period for in-flight requests on close. Default 10 s. */

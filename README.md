@@ -70,7 +70,7 @@ npm run test
 npm run demo          # == npx tsx examples/demo.ts (in-process API, mock RPC, no network)
 ```
 
-The demo runs seven cases through the SDK against the in-process API: (a) small ERC-20 transfer → `allow`, (b) unlimited approve → `block`, (c) call into a never-seen contract → `escalate`, (d) Solana SPL transfer → `allow`, (e) a bounded, under-cap approval whose spender is an EOA rather than a contract (no protocol needs that; it is how a drainer gets `transferFrom` rights) → `block`, (f) transfer whose recipient is on the operator's reputation denylist → `block`, (g) reputation provider outage → `escalate`.
+The demo runs eight cases through the SDK against the in-process API: (a) small ERC-20 transfer → `allow`, (b) unlimited approve → `block`, (c) call into a never-seen contract → `escalate`, (d) Solana SPL transfer → `allow`, (e) a bounded, under-cap approval whose spender is an EOA rather than a contract (no protocol needs that; it is how a drainer gets `transferFrom` rights) → `block`, (f) transfer whose recipient is on the operator's reputation denylist → `block`, (g) reputation provider outage → `escalate`, (h) an escalated transaction and its human approval: the agent's own approval attempt is refused with `403`, the approver device signs the challenge, the server verifies it and the status becomes `approved` (see [Human approval (I-HITL)](#human-approval-i-hitl)).
 
 Run the server against real RPC endpoints:
 
@@ -79,6 +79,8 @@ export AGENTGUARD_EVM_RPC_URL=https://mainnet.base.org
 export AGENTGUARD_SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
 export AGENTGUARD_API_KEYS=ops-bot:secret-1,treasury:secret-2  # id:key pairs; required when NODE_ENV=production
 export AGENTGUARD_AUDIT_SIGNING_KEY=<ed25519 seed hex|base64|pkcs8 pem>  # required in production; dev generates an ephemeral key
+export AGENTGUARD_APPROVER_KEYS=ops-phone:<base64 ed25519 pub>,cfo-yubikey:<base64 ed25519 pub>  # human approver PUBLIC keys (see Human approval); private halves stay on the devices
+export AGENTGUARD_APPROVAL_TTL_MS=900000              # how long an escalation stays approvable (default 15 min)
 export AGENTGUARD_POLICY_FILE=./policy.json           # optional; defaults to conservativeDefaultPolicy
 export AGENTGUARD_AUDIT_FILE=./audit.jsonl            # optional; defaults to in-memory
 export AGENTGUARD_KNOWN_EVM_CONTRACTS=0xabc...,0xdef... # optional; enables new-contract detection
@@ -163,9 +165,21 @@ Response (`200`):
 
 `simulation.recipients` lists the addresses that receive funds as decoded from calldata / instructions (ERC-20 `transfer` targets, swap recipients, SPL destinations, `SetAuthority` new authorities); the `denylist`, `allowlist_only`, behavior and reputation rules all treat these as counterparties, so a drain cannot hide behind a trusted token contract.
 
-Other routes: `GET /healthz`, `GET /v1/audit/:id`, `GET /v1/audit?agentId=&limit=&cursor=`, `GET /v1/audit/verify?from=&to=&requireSignatures=` (re-walks the hash chain and reports `hash_mismatch` / `broken_link` / `seq_gap` / `bad_signature`). Offline: `npx tsx packages/api/scripts/verify-audit.ts audit.jsonl --public-key pub.pem --require-signatures`.
+When the verdict is `escalate` and the server has approver keys registered, the response also carries `"approval": { "challenge": "<64 hex>", "expiresAt": "…" }`: the value a registered human device must sign for the transaction to be approved (see [Human approval (I-HITL)](#human-approval-i-hitl)). `allow` and `block` never carry one.
 
-Errors are always JSON with a `requestId`: `400 bad_request | unsupported_chain`, `401 unauthorized | invalid_signature`, `404 policy_not_found | not_found`, `413 payload_too_large`, `415 unsupported_media_type`, `429 rate_limited` (with `retry-after`), `503 audit_unavailable`, `500 internal_error` (generic body; details only in server logs).
+### `POST /v1/approvals` and `GET /v1/approvals/:auditId`
+
+Human approval of an escalation, verified on the server. The body is produced by the approver device, never by the agent:
+
+```json
+{ "auditId": "7d2e…", "keyId": "ops-phone", "signature": "<base64 Ed25519 over the UTF-8 challenge>", "approvedAt": "2026-11-12T05:31:00.000Z", "reason": "vendor confirmed" }
+```
+
+`200 { "verdict": "allow", "approvalId": "…", "auditId": "…", "approvalAuditId": "…" }` when the pending approval exists, is not expired or used, `keyId` is registered, the signature verifies and `approvedAt` is inside the window; every other outcome is a generic `403 approval_rejected` (the reason goes to the server log and to an `approval_rejected` audit record, never to the response) and burns the challenge, so a new check is needed. Approvals are single use. `GET /v1/approvals/:auditId` returns `{ "auditId", "status": "pending" | "approved" | "expired" | "rejected" | "unknown", "expiresAt"?, "approvedBy"?, "approvalId"?, "approvedAt"? }`; it is what the SDK polls and it cannot change state. Both routes require an API key like every other route and sit behind the same rate limiter.
+
+Other routes: `GET /healthz`, `GET /v1/audit/:id`, `GET /v1/audit?agentId=&limit=&cursor=`, `GET /v1/audit/verify?from=&to=&requireSignatures=` (re-walks the hash chain and reports `hash_mismatch` / `broken_link` / `seq_gap` / `bad_signature`). Offline: `npx tsx packages/api/scripts/verify-audit.ts audit.jsonl --public-key pub.pem --require-signatures` (also lists every approval with the check it refers to and the approver key).
+
+Errors are always JSON with a `requestId`: `400 bad_request | unsupported_chain`, `401 unauthorized | invalid_signature`, `403 approval_rejected`, `404 policy_not_found | not_found`, `413 payload_too_large`, `415 unsupported_media_type`, `429 rate_limited` (with `retry-after`), `503 audit_unavailable`, `500 internal_error` (generic body; details only in server logs).
 
 ## SDK
 
@@ -182,19 +196,63 @@ const safeSigner = guard(signer, client, {
   // Map the signer's native tx argument to a TransactionIntent (id is generated for you).
   toIntent: (tx) => ({ chain: "evm", chainId: 8453, from: tx.from, to: tx.to, value: tx.value, data: tx.data }),
   context: { agentId: "ops-agent-1", windowSeconds: 3600 },
-  onEscalate: async ({ decision, auditId }) => askHumanForApproval(decision.explanation, auditId), // return true to proceed
+  // approval: "server" is the default: an escalation can only proceed once a registered
+  // human device has signed the server's challenge and the server has verified it.
+  onEscalationPending: ({ auditId, approval }) => notifyOps(auditId, approval?.challenge), // cannot approve; just routes the challenge to a human
+  waitForApproval: { timeoutMs: 10 * 60_000 }, // block here, polling the server, until approved / expired / timed out
   onDecision: ({ decision }) => metrics.record(decision.verdict, decision.riskScore),
 });
 
 try {
-  await safeSigner.sendTransaction(tx);           // checked first; throws on block / unapproved escalate
+  await safeSigner.sendTransaction(tx);           // checked first; signs only on allow, or on escalate once the server reports a verified approval
 } catch (err) {
   if (err instanceof GuardBlockedError) console.error("blocked:", err.decision.explanation);
-  if (err instanceof GuardEscalatedError) console.warn("needs review:", err.auditId);
+  if (err instanceof GuardEscalatedError) console.warn("needs a human:", err.auditId, err.challenge); // without waitForApproval: hand these to the approver, later client.waitForApproval(auditId)
 }
 ```
 
-`client.check(intent, context)` is available for direct use without wrapping a signer. `guard()` fails closed: network errors, 4xx/5xx, malformed responses and exceptions thrown by your hooks all prevent the signer from being called.
+`client.check(intent, context)` is available for direct use without wrapping a signer; `client.getApprovalStatus(auditId)` and `client.waitForApproval(auditId, { timeoutMs, intervalMs })` read the server-side approval state (they can observe an approval, never cause one). `guard()` fails closed: network errors, 4xx/5xx, malformed responses, approval timeouts/expiry/rejection and exceptions thrown by your hooks all prevent the signer from being called.
+
+`approval: "callback"` with `onEscalate` is the old in-process callback, kept only as an explicitly opted-in **advisory mode**: the callback runs inside the agent's process, so the agent (or whatever compromised it) can approve its own transaction. It is not I-HITL, `guard()` logs a warning once when it is used, and it refuses to be combined with server mode. Do not use it where the agent is untrusted or the signer controls real funds.
+
+## Human approval (I-HITL)
+
+An `escalate` verdict means "a human has to decide". The question raised by Vilardell et al. (*inalienable human-in-the-loop*, [arXiv:2610.35835](https://arxiv.org/abs/2610.35835)) is whether the human can be taken out of that loop by the agent. If approval is a callback in the agent's process, it can: the agent can call it, stub it, or just return `true`. AgentGuard therefore makes approval a cryptographic act that happens outside the agent's reach and is verified by the service:
+
+```
+          agent host (untrusted)             AgentGuard API (verifier)              approver device (trusted)
+  ┌──────────────────────────────┐    ┌──────────────────────────────────┐    ┌────────────────────────────────┐
+  │ agent + @agentguard/sdk      │    │ POST /v1/check -> escalate       │    │ phone / HSM / hardware key /   │
+  │ holds: API key               │───>│   challenge = sha256(canonical(  │    │ approve.ts on an ops laptop    │
+  │                              │    │     v, auditId, intentHash,      │    │ holds: approver PRIVATE key    │
+  │ can: submit checks, read     │    │     decisionHash, policy, agent, │    │                                │
+  │      status, forward the     │    │     issuedAt)) sealed into the   │    │ 1. reads the audit record and  │
+  │      challenge to a human    │    │   signed audit chain             │    │    recomputes the challenge    │
+  │                              │<───│ response: { escalate, auditId,   │    │ 2. signs it (Ed25519)          │
+  │ cannot: sign the challenge,  │    │             approval.challenge } │    │ 3. POST /v1/approvals          │
+  │   mint/forge/replay an       │    │                                  │<───│    { auditId, keyId,           │
+  │   approval, change status    │    │ verifies: pending, unexpired,    │    │      signature, approvedAt }   │
+  │                              │    │   unused, keyId registered,      │    └────────────────────────────────┘
+  │ GET /v1/approvals/:auditId ──│───>│   Ed25519 valid, window          │
+  │   pending -> approved        │    │ records: approval audit record   │
+  └──────────────────────────────┘    │ (chained + signed, principal =   │
+                                      │  approverKeyId)                  │
+                                      └──────────────────────────────────┘
+
+  Three key kinds, three holders, never shared:
+    API keys              agent & device   transport auth; who submitted a request (audit principal.apiKeyId)
+    approver keys         device only      the only thing that can approve an escalation (audit principal.approverKeyId)
+    audit signing key     service only     signs the chain; refused as an approver key at startup
+```
+
+How to run it:
+
+1. On the approver device: `npx tsx packages/api/scripts/approver-keygen.ts --id ops-phone --out ops-phone.key`. The private key stays there; the printed `AGENTGUARD_APPROVER_KEYS=ops-phone:<base64>` line goes to the server environment. Register as many devices as you have approvers; each gets its own id.
+2. The agent runs behind `guard()` in the default server mode. On `escalate` it receives `auditId` and `challenge` (in `GuardEscalatedError`, in `onEscalationPending`, or in `client.check()`'s response) and can only pass them on.
+3. The human opens the audit record (`GET /v1/audit/:auditId`), checks the explanation and findings, and signs: `npx tsx packages/api/scripts/approve.ts --key ops-phone.key --key-id ops-phone --audit-id <auditId> --challenge <challenge> --record record.json --url https://agentguard --api-key <the device's own API key>`. With `--record`, the CLI recomputes the challenge from the record and refuses to sign if the two differ, so a challenge relayed through the agent cannot point at a different transaction.
+4. The server verifies the signature against its registry, marks the approval used, appends an `approval` audit record linked to the check, and `GET /v1/approvals/:auditId` (or the SDK's `waitForApproval`) reports `approved`.
+
+Properties: single use (a replay is a `403` and an `approval_rejected` record), time-boxed (`AGENTGUARD_APPROVAL_TTL_MS`, default 15 minutes), only `escalate` decisions are approvable (`allow` needs none, `block` never gets one), any invalid attempt burns the challenge so the next request has to start from a fresh check, failures are a generic `403` with the reason only in logs and the audit chain, and `scripts/verify-audit.ts` shows every approval next to the check it refers to. What this does **not** yet give you: the service is still the verifier, so a compromised AgentGuard host could approve. Moving enforcement on-chain (a Safe guard module / Solana program that checks the approver signature itself) is the roadmap item; see docs/THREAT_MODEL.md, threat T7.
 
 ## Policy
 
@@ -238,7 +296,7 @@ Hardening, key handling and the deployment checklist live in [SECURITY.md](SECUR
 
 - Verified-source / TVL / known-exploit feeds as additional reputation providers (the `HttpProvider` adapter is the integration point); per-tenant baselines shared across agents of the same operator.
 - SOC 2 controls for the hosted service: retention policies, per-tenant audit scoping, signed policy files, response signing (tamper-evident audit log and key rotation shipped in 0.1).
-- Custody integrations: Fireblocks policy-engine hooks and Safe (Gnosis) guard module so AgentGuard sits inline with institutional signing.
+- Custody integrations: Fireblocks policy-engine hooks and Safe (Gnosis) guard module so AgentGuard sits inline with institutional signing. For human approval (I-HITL) specifically, the Safe guard / Solana program would verify the approver's Ed25519 signature over the escalation challenge on-chain, so that neither the agent host nor the AgentGuard service can execute an escalated transaction without it; today the service is the verifier (see docs/THREAT_MODEL.md, T7).
 
 ## Contributing and license
 

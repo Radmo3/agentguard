@@ -2,6 +2,7 @@ import { z } from "zod";
 import type {
   AgentContext,
   ApprovalChange,
+  ApprovalSubmission,
   AssetDelta,
   AuditRecord,
   CheckRequest,
@@ -23,6 +24,8 @@ export const LIMITS = {
   id: 128,
   listEntries: 1000,
   chainIdString: 64,
+  /** Free-text reason on an approval submission. */
+  approvalReason: 512,
 } as const;
 
 /** Decimal string (optionally negative) -> bigint. Accepts bigint/number inputs too for in-process use. */
@@ -141,6 +144,29 @@ export function parseCheckRequest(body: unknown): CheckRequest {
   return parsed as unknown as CheckRequest;
 }
 
+/** Body of `POST /v1/approvals`. Strict: unknown keys rejected, every field bounded. */
+export const approvalSubmissionSchema = z
+  .object({
+    auditId: uuid,
+    keyId: z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/, "expected approver key id"),
+    // 64-byte Ed25519 signature, base64 => exactly 88 characters with one '=' of padding.
+    signature: z.string().length(88).regex(/^[A-Za-z0-9+/]{86}==$/, "expected base64 Ed25519 signature"),
+    approvedAt: z.string().datetime({ offset: true }),
+    reason: z.string().max(LIMITS.approvalReason).optional(),
+  })
+  .strict();
+
+export function parseApprovalSubmission(body: unknown): ApprovalSubmission {
+  return approvalSubmissionSchema.parse(body) as ApprovalSubmission;
+}
+
+/** Strip control characters and cap length: approver-supplied text is data, shown to humans only. */
+export function sanitizeReason(s: string | undefined): string | undefined {
+  if (s === undefined) return undefined;
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, LIMITS.approvalReason);
+}
+
 /** Serialise anything containing bigints to JSON (bigints as decimal strings). */
 export function stringifyWithBigints(value: unknown): string {
   return JSON.stringify(value, bigintReplacer);
@@ -201,7 +227,10 @@ export function reviveAuditRecord(raw: Record<string, unknown>): AuditRecord {
     decision: reviveDecision(raw.decision as Record<string, unknown>),
     context: reviveContext(raw.context as Record<string, unknown>),
   };
+  if (raw.type !== undefined) rec.type = raw.type as AuditRecord["type"];
   if (raw.principal) rec.principal = raw.principal as AuditRecord["principal"];
   if (raw.integrity) rec.integrity = raw.integrity as AuditRecord["integrity"];
+  if (raw.approvalRequest) rec.approvalRequest = raw.approvalRequest as AuditRecord["approvalRequest"];
+  if (raw.approval) rec.approval = raw.approval as AuditRecord["approval"];
   return rec;
 }

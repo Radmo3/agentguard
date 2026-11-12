@@ -50,7 +50,7 @@ describe("guard() fails closed", () => {
     const { fetch } = mockFetch(jsonResponse(200, { decision: decisionJson("escalate"), auditId: "a" }));
     const client = new AgentGuardClient({ baseUrl: "http://gw", fetch });
     const s1 = signer();
-    await expect(guard(s1, client, { toIntent, context: { agentId: "a" }, onEscalate: () => { throw new Error("ui down"); } }).sendTransaction(tx)).rejects.toThrow("ui down");
+    await expect(guard(s1, client, { toIntent, context: { agentId: "a" }, approval: "callback", warn: () => {}, onEscalate: () => { throw new Error("ui down"); } }).sendTransaction(tx)).rejects.toThrow("ui down");
     expect(s1.sendTransaction).not.toHaveBeenCalled();
 
     const { fetch: f2 } = mockFetch(jsonResponse(200, { decision: decisionJson("allow"), auditId: "a" }));
@@ -68,11 +68,11 @@ describe("guard() fails closed", () => {
     expect(s4.sendTransaction).not.toHaveBeenCalled();
   });
 
-  it("only a literal `true` from onEscalate proceeds", async () => {
+  it("advisory mode: only a literal `true` from onEscalate proceeds", async () => {
     for (const ret of [1, "true", {}, [], null, undefined, false]) {
       const { fetch } = mockFetch(jsonResponse(200, { decision: decisionJson("escalate"), auditId: "a" }));
       const s = signer();
-      const g = guard(s, new AgentGuardClient({ baseUrl: "http://gw", fetch }), { toIntent, context: { agentId: "a" }, onEscalate: () => ret as never });
+      const g = guard(s, new AgentGuardClient({ baseUrl: "http://gw", fetch }), { toIntent, context: { agentId: "a" }, approval: "callback", warn: () => {}, onEscalate: () => ret as never });
       await expect(g.sendTransaction(tx)).rejects.toBeInstanceOf(GuardEscalatedError);
       expect(s.sendTransaction).not.toHaveBeenCalled();
     }

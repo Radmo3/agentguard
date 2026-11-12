@@ -38,7 +38,12 @@ export function reviveDecision(raw: Record<string, unknown>): Decision {
 }
 
 export function reviveCheckResponse(raw: Record<string, unknown>): CheckResponse {
-  return { decision: reviveDecision(raw.decision as Record<string, unknown>), auditId: raw.auditId as string };
+  const out: CheckResponse = { decision: reviveDecision(raw.decision as Record<string, unknown>), auditId: raw.auditId as string };
+  const a = raw.approval as { challenge?: unknown; expiresAt?: unknown } | undefined;
+  if (a && typeof a === "object" && typeof a.challenge === "string" && typeof a.expiresAt === "string") {
+    out.approval = { challenge: a.challenge, expiresAt: a.expiresAt };
+  }
+  return out;
 }
 
 export function reviveIntent(raw: Record<string, unknown>): TransactionIntent {

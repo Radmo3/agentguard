@@ -1,5 +1,5 @@
-import type { AgentContext, AuditRecord, CheckRequest, CheckResponse, TransactionIntent } from "@agentguard/core";
-import { AgentGuardHttpError, AgentGuardNetworkError, AgentGuardProtocolError, AgentGuardTimeoutError } from "./errors.js";
+import type { AgentContext, ApprovalStatus, ApprovalStatusResponse, AuditRecord, CheckRequest, CheckResponse, TransactionIntent } from "@agentguard/core";
+import { AgentGuardHttpError, AgentGuardNetworkError, AgentGuardProtocolError, AgentGuardTimeoutError, ApprovalDeniedError, ApprovalTimeoutError } from "./errors.js";
 import { reviveCheckResponse, reviveContext, reviveDecision, reviveIntent, serializeRequest } from "./serialization.js";
 import { signRequest, type RequestSigner } from "./signing.js";
 
@@ -39,6 +39,24 @@ export interface CheckOptions {
 export interface AuditPage {
   items: AuditRecord[];
   nextCursor?: string;
+}
+
+export interface WaitForApprovalOptions {
+  /** Give up after this long. Default 15 minutes (the server's default approval TTL). */
+  timeoutMs?: number;
+  /** Poll interval. Default 2 s. */
+  intervalMs?: number;
+  signal?: AbortSignal;
+  /** Called after every poll (observability only; the return value is ignored). */
+  onPoll?: (status: ApprovalStatusResponse) => void;
+}
+
+export interface ApprovalGranted {
+  auditId: string;
+  status: "approved";
+  approvedBy: string;
+  approvalId: string;
+  approvedAt?: string;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -92,6 +110,45 @@ export class AgentGuardClient {
     const suffix = qs.size ? `?${qs}` : "";
     const raw = (await this.request("GET", `/v1/audit${suffix}`, opts)) as { items: Record<string, unknown>[]; nextCursor?: string };
     return { items: raw.items.map(reviveAudit), nextCursor: raw.nextCursor };
+  }
+
+  /**
+   * Read the server-side approval status of an escalated check. Read-only: the
+   * agent can observe whether a human approved, never cause it.
+   */
+  async getApprovalStatus(auditId: string, opts: Pick<CheckOptions, "timeoutMs" | "signal"> = {}): Promise<ApprovalStatusResponse> {
+    const raw = await this.request("GET", `/v1/approvals/${encodeURIComponent(auditId)}`, opts);
+    return assertApprovalStatus(raw, auditId);
+  }
+
+  /**
+   * Poll `GET /v1/approvals/:auditId` until the server reports `approved`.
+   * Resolves only on a literal `approved`; `expired` / `rejected` / `unknown` throw
+   * `ApprovalDeniedError`, the deadline throws `ApprovalTimeoutError`, and any
+   * malformed status throws `AgentGuardProtocolError`. Nothing in this method can
+   * produce an approval: it only reads state the approver device created.
+   */
+  async waitForApproval(auditId: string, opts: WaitForApprovalOptions = {}): Promise<ApprovalGranted> {
+    const timeoutMs = opts.timeoutMs ?? 15 * 60_000;
+    const intervalMs = Math.max(50, opts.intervalMs ?? 2_000);
+    const deadline = Date.now() + timeoutMs;
+    let last: ApprovalStatus | undefined;
+    for (;;) {
+      if (opts.signal?.aborted) throw new AgentGuardNetworkError("waitForApproval aborted", opts.signal.reason);
+      const st = await this.getApprovalStatus(auditId, { signal: opts.signal });
+      opts.onPoll?.(st);
+      last = st.status;
+      if (st.status === "approved") {
+        if (typeof st.approvedBy !== "string" || !st.approvedBy || typeof st.approvalId !== "string" || !st.approvalId) {
+          throw new AgentGuardProtocolError("malformed approval status: approved without approvedBy/approvalId");
+        }
+        return { auditId, status: "approved", approvedBy: st.approvedBy, approvalId: st.approvalId, approvedAt: st.approvedAt };
+      }
+      if (st.status !== "pending") throw new ApprovalDeniedError(auditId, st.status);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new ApprovalTimeoutError(auditId, timeoutMs, last);
+      await sleep(Math.min(intervalMs, remaining));
+    }
   }
 
   async health(): Promise<{ ok: boolean; chains: string[]; policies: string[] }> {
@@ -168,6 +225,17 @@ export class AgentGuardClient {
 }
 
 const VERDICTS = new Set(["allow", "block", "escalate"]);
+const APPROVAL_STATUSES = new Set<ApprovalStatus>(["pending", "approved", "expired", "rejected", "unknown"]);
+
+/** Fail closed on malformed status responses: anything unrecognised is not `approved`. */
+function assertApprovalStatus(raw: unknown, auditId: string): ApprovalStatusResponse {
+  const r = raw as Partial<ApprovalStatusResponse> | null;
+  if (!r || typeof r !== "object" || typeof r.status !== "string" || !APPROVAL_STATUSES.has(r.status)) {
+    throw new AgentGuardProtocolError("malformed approval status response");
+  }
+  if (r.auditId !== auditId) throw new AgentGuardProtocolError("approval status response is for a different audit id");
+  return r as ApprovalStatusResponse;
+}
 
 /**
  * Fail closed on malformed server responses: a response without a recognised
@@ -182,6 +250,13 @@ function assertCheckResponse(raw: unknown): Record<string, unknown> {
     throw new AgentGuardProtocolError("malformed check response: unknown verdict");
   }
   if (typeof r.auditId !== "string" || !r.auditId) throw new AgentGuardProtocolError("malformed check response: missing auditId");
+  const a = (r as { approval?: unknown }).approval;
+  if (a !== undefined) {
+    const ap = a as { challenge?: unknown; expiresAt?: unknown } | null;
+    if (!ap || typeof ap !== "object" || typeof ap.challenge !== "string" || !/^[0-9a-f]{64}$/.test(ap.challenge) || typeof ap.expiresAt !== "string") {
+      throw new AgentGuardProtocolError("malformed check response: bad approval challenge");
+    }
+  }
   return r as Record<string, unknown>;
 }
 

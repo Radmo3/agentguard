@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { LogController, type FastifyBaseLogger, type FastifyInstance, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
-import type { AuditPrincipal, AuditRecord, ChainAdapter, CheckResponse, Decision, SimulationResult } from "@agentguard/core";
-import { nowIso } from "@agentguard/core";
+import type { ApprovalStatusResponse, AuditPrincipal, AuditRecord, ChainAdapter, CheckResponse, Decision, SimulationResult } from "@agentguard/core";
+import { computeApprovalChallenge, nowIso } from "@agentguard/core";
+import { ApproverRegistry, DEFAULT_APPROVAL_CLOCK_SKEW_MS, PendingApprovalStore, verifyApprovalSubmission, type ApprovalRejectionReason } from "./approvals.js";
 import { ApiKeyring, NonceCache, type SignatureInput } from "./auth.js";
 import { AdapterUnavailableError, CircuitBreakerAdapter } from "./breaker.js";
 import { verifyChain } from "./integrity.js";
 import { createRedactingLogger } from "./logger.js";
-import { parseCheckRequest, stringifyWithBigints } from "./serialization.js";
+import { parseApprovalSubmission, parseCheckRequest, sanitizeReason, stringifyWithBigints } from "./serialization.js";
 import type { ServerOptions } from "./types.js";
 
 declare module "fastify" {
@@ -129,6 +130,20 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
 
   if (keyring.size === 0) app.log.warn("AGENTGUARD_API_KEYS is not set: API key authentication is DISABLED");
+
+  // ---- Human approval of escalations (I-HITL) ----
+  // Approver keys are the only thing that can turn `escalate` into an approval, and
+  // the server itself must not hold one: refuse any approver key that is also an audit
+  // signing/verification key.
+  const serverHeldKeyIds = new Set<string>(opts.auditPublicKeys?.keys() ?? []);
+  const auditSignerKeyId = (opts.audit as { signerKeyId?: string }).signerKeyId;
+  if (auditSignerKeyId) serverHeldKeyIds.add(auditSignerKeyId);
+  const approvers = new ApproverRegistry(opts.approvers ?? [], { forbiddenKeyIds: serverHeldKeyIds });
+  const pendingApprovals = new PendingApprovalStore({ ttlMs: opts.approvals?.ttlMs, maxPending: opts.approvals?.maxPending, now: opts.approvals?.now });
+  const approvalsNow = opts.approvals?.now ?? Date.now;
+  const approvalClockSkewMs = opts.approvals?.clockSkewMs ?? DEFAULT_APPROVAL_CLOCK_SKEW_MS;
+  if (approvers.size > 0) app.log.info({ approverKeyIds: approvers.ids, ttlMs: pendingApprovals.ttlMs }, "human approval enabled: escalations carry a challenge for registered approver keys");
+  else app.log.warn("AGENTGUARD_APPROVER_KEYS is not set: escalated transactions cannot be approved through the API");
 
   // ---- Adapters wrapped in circuit breakers ----
   const adapters: Partial<Record<string, ChainAdapter>> = {};
@@ -417,7 +432,27 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     }
 
     const principal: AuditPrincipal = { ...req.principal };
-    const record: AuditRecord = { id: randomUUID(), intent, decision, context, recordedAt: nowIso(), principal };
+    const record: AuditRecord = { id: randomUUID(), type: "check", intent, decision, context, recordedAt: nowIso(), principal };
+
+    // Escalations get a challenge bound to this very record (auditId, intent, decision,
+    // policy, agent, issue time). It is sealed into the chain *before* the agent sees it,
+    // so the agent cannot later claim a different transaction was what the human approved.
+    if (decision.verdict === "escalate" && approvers.size > 0) {
+      const issuedAtMs = approvalsNow();
+      const issuedAt = new Date(issuedAtMs).toISOString();
+      const expiresAt = new Date(issuedAtMs + pendingApprovals.ttlMs).toISOString();
+      const challenge = computeApprovalChallenge({
+        auditId: record.id,
+        intent,
+        decision,
+        policyId: decision.policyId,
+        policyVersion: decision.policyVersion,
+        agentId: context.agentId,
+        issuedAt,
+      });
+      record.approvalRequest = { challenge, issuedAt, expiresAt };
+    }
+
     let sealed: AuditRecord;
     try {
       sealed = await opts.audit.record(record);
@@ -425,6 +460,10 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
       // The audit trail is part of the product guarantee: no record, no verdict.
       req.log.error({ err, intentId: intent.id }, "audit store failed to record");
       return reply.code(503).send({ error: "audit_unavailable", message: "decision could not be recorded; transaction must not proceed", requestId: req.id });
+    }
+    if (sealed.approvalRequest) {
+      // Only a sealed record can be approved: the pending entry is created after the audit write.
+      pendingApprovals.issue({ auditId: sealed.id, challenge: sealed.approvalRequest.challenge, issuedAt: sealed.approvalRequest.issuedAt, expiresAt: sealed.approvalRequest.expiresAt, agentId: context.agentId });
     }
 
     // Fold the outcome into the agent's behavioral baseline. Awaited so tests and
@@ -446,7 +485,108 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     );
 
     const response: CheckResponse = { decision: sealed.decision, auditId: sealed.id };
+    if (sealed.approvalRequest) response.approval = { challenge: sealed.approvalRequest.challenge, expiresAt: sealed.approvalRequest.expiresAt };
     return response;
+  });
+
+  // ---- Human approval (I-HITL): the only path from `escalate` to an approval ----
+  // The caller is whoever holds a registered approver private key, which the agent
+  // process never does. Every failure is a generic 403 (no oracle); the reason goes
+  // to the log and to an `approval_rejected` audit record.
+  const approvalRejectedBody = (requestId: string) => ({ error: "approval_rejected", message: "approval could not be verified", requestId });
+
+  app.post("/v1/approvals", async (req, reply) => {
+    const body = parseApprovalSubmission(req.body);
+    const now = approvalsNow();
+    const pending = pendingApprovals.get(body.auditId);
+    const record = await opts.audit.get(body.auditId);
+    const reasons: ApprovalRejectionReason[] = verifyApprovalSubmission(body, { pending, record, registry: approvers, now, clockSkewMs: approvalClockSkewMs });
+
+    // Claim is synchronous and single-use: two concurrent valid submissions cannot both win.
+    const claimed = reasons.length === 0 ? pendingApprovals.claim(body.auditId, { keyId: body.keyId, approvedAt: body.approvedAt }) : undefined;
+    if (reasons.length === 0 && !claimed) reasons.push("already_used");
+
+    const reason = sanitizeReason(body.reason);
+    const principal: AuditPrincipal = { ...req.principal, approverKeyId: body.keyId };
+
+    if (reasons.length > 0 || !claimed || !record) {
+      req.log.warn({ auditId: body.auditId, keyId: body.keyId, reasons, apiKeyId: req.principal.apiKeyId }, "approval rejected");
+      // Fail closed: a challenge that saw an invalid attempt is burned. A fresh check is required.
+      if (pending && pendingApprovals.status(body.auditId).status === "pending") pendingApprovals.reject(body.auditId);
+      if (record) {
+        const rejected: AuditRecord = {
+          id: randomUUID(),
+          type: "approval_rejected",
+          intent: record.intent,
+          decision: record.decision,
+          context: record.context,
+          recordedAt: nowIso(),
+          principal,
+          approval: {
+            checkAuditId: record.id,
+            challenge: pending?.challenge ?? record.approvalRequest?.challenge ?? "",
+            outcome: "rejected",
+            approverKeyId: body.keyId,
+            reason,
+            rejectionReason: reasons.join(","),
+          },
+        };
+        try {
+          await opts.audit.record(rejected);
+        } catch (err) {
+          req.log.error({ err, auditId: body.auditId }, "audit store failed to record approval rejection");
+          return reply.code(503).send({ error: "audit_unavailable", message: "approval could not be recorded", requestId: req.id });
+        }
+      }
+      return reply.code(403).send(approvalRejectedBody(req.id));
+    }
+
+    const approvalRecord: AuditRecord = {
+      id: randomUUID(),
+      type: "approval",
+      intent: record.intent,
+      decision: record.decision,
+      context: record.context,
+      recordedAt: nowIso(),
+      principal,
+      approval: {
+        checkAuditId: record.id,
+        challenge: claimed.challenge,
+        outcome: "approved",
+        approvalId: claimed.approvalId,
+        approverKeyId: body.keyId,
+        approvedAt: body.approvedAt,
+        reason,
+      },
+    };
+    let sealed: AuditRecord;
+    try {
+      sealed = await opts.audit.record(approvalRecord);
+    } catch (err) {
+      // No record, no approval: the claim is burned rather than reopened.
+      pendingApprovals.invalidate(body.auditId);
+      req.log.error({ err, auditId: body.auditId }, "audit store failed to record approval");
+      return reply.code(503).send({ error: "audit_unavailable", message: "approval could not be recorded; transaction must not proceed", requestId: req.id });
+    }
+    req.log.info({ auditId: body.auditId, approvalId: claimed.approvalId, approvalAuditId: sealed.id, approverKeyId: body.keyId, apiKeyId: req.principal.apiKeyId }, "approval verified");
+    return { verdict: "allow" as const, approvalId: claimed.approvalId, auditId: body.auditId, approvalAuditId: sealed.id };
+  });
+
+  // Read-only: the agent polls this; nothing here changes state.
+  app.get<{ Params: { auditId: string } }>("/v1/approvals/:auditId", async (req, reply) => {
+    const id = auditIdParamSchema.safeParse(req.params.auditId);
+    if (!id.success) return reply.code(404).send({ error: "not_found", message: "approval not found", requestId: req.id });
+    const { status, entry } = pendingApprovals.status(id.data);
+    const out: ApprovalStatusResponse = { auditId: id.data, status };
+    if (entry) {
+      out.expiresAt = entry.expiresAt;
+      if (status === "approved") {
+        out.approvedBy = entry.approvedBy;
+        out.approvalId = entry.approvalId;
+        out.approvedAt = entry.approvedAt;
+      }
+    }
+    return out;
   });
 
   app.get("/v1/audit/verify", async (req, reply) => {

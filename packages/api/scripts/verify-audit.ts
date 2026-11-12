@@ -1,16 +1,20 @@
 #!/usr/bin/env tsx
 /**
- * Verify the hash chain (and optionally Ed25519 signatures) of a JSONL audit file.
+ * Verify the hash chain (and optionally Ed25519 signatures) of a JSONL audit file,
+ * and list the provenance of every human approval: which `escalate` check it refers
+ * to, which approver key signed it, and whether the link is intact.
  *
  *   npx tsx packages/api/scripts/verify-audit.ts <audit.jsonl> [--public-key <pem|hex|base64>]... [--require-signatures] [--from N] [--to N] [--json]
  *
- * Exit code 0 when the chain verifies, 1 on failure, 2 on usage error.
+ * Exit code 0 when the chain verifies and every approval links to an escalated
+ * check with the matching challenge, 1 on failure, 2 on usage error.
  */
 import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import type { KeyObject } from "node:crypto";
 import type { AuditRecord } from "@agentguard/core";
+import { summarizeApprovals, type ApprovalProvenance } from "../src/approvals.js";
 import { keyIdOf, loadEd25519PublicKey, verifyChain, type VerifyResult } from "../src/integrity.js";
 import { reviveAuditRecord } from "../src/serialization.js";
 
@@ -95,18 +99,33 @@ async function main(): Promise<void> {
     requireSignatures: args.requireSignatures,
   });
 
+  const approvals: ApprovalProvenance[] = summarizeApprovals(records);
+  const approvalProblems = approvals.filter((a) => a.problems.length > 0);
+  const ok = result.ok && approvalProblems.length === 0;
+
   if (args.json) {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify({ ...result, ok, approvals }, null, 2));
   } else {
     console.log(`records checked: ${result.checked}  signed: ${result.signedCount}  range: ${result.firstSeq ?? "-"}..${result.lastSeq ?? "-"}`);
     if (result.lastHash) console.log(`head hash: ${result.lastHash}`);
-    if (result.ok) console.log("OK: audit chain verified");
+    const approved = approvals.filter((a) => a.type === "approval").length;
+    console.log(`approvals: ${approved} approved, ${approvals.length - approved} rejected attempt(s)`);
+    for (const a of approvals) {
+      const link = a.checkSeq !== undefined ? `check seq=${a.checkSeq}` : `check ${a.checkAuditId} (not in range)`;
+      const who = a.approverKeyId ? ` key=${a.approverKeyId}` : "";
+      const when = a.approvedAt ? ` at=${a.approvedAt}` : "";
+      const why = a.rejectionReason ? ` reason=${a.rejectionReason}` : "";
+      const problems = a.problems.length ? `  !! ${a.problems.join(",")}` : "";
+      console.log(`  seq=${a.seq ?? "-"} ${a.type.padEnd(17)} -> ${link}${who}${when}${why}${problems}`);
+    }
+    if (ok) console.log("OK: audit chain verified; approval provenance intact");
     else {
-      console.error(`FAIL: ${result.failures.length} problem(s)`);
+      console.error(`FAIL: ${result.failures.length + approvalProblems.length} problem(s)`);
       for (const f of result.failures) console.error(`  seq=${f.seq} id=${f.id} ${f.reason}${f.detail ? ` (${f.detail})` : ""}`);
+      for (const a of approvalProblems) console.error(`  seq=${a.seq ?? "-"} id=${a.recordId} ${a.type}: ${a.problems.join(", ")}`);
     }
   }
-  process.exit(result.ok ? 0 : 1);
+  process.exit(ok ? 0 : 1);
 }
 
 main().catch((err) => {

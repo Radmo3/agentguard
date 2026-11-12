@@ -13,6 +13,9 @@
  *   (e) bounded ERC-20 approve to an EOA            -> block   (no protocol needs an EOA spender)
  *   (f) transfer to a denylisted contract           -> block   (contract reputation)
  *   (g) reputation provider outage                  -> escalate (fail closed)
+ *   (h) escalated tx + human approval (I-HITL)      -> escalate, then: the agent's own approval
+ *       attempt is refused (403), the approver device signs the challenge, the server
+ *       verifies it and the status becomes `approved`
  *
  * The behavioral anomaly layer (`@agentguard/behavior`, separately licensed) is not
  * part of this repository; when installed it plugs into `createServer` through
@@ -20,6 +23,7 @@
  *
  * Run with: npx tsx examples/demo.ts
  */
+import { generateKeyPairSync, sign as edSign } from "node:crypto";
 import { encodeAbiParameters, encodeFunctionData, type Hex } from "viem";
 import {
   Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction,
@@ -33,6 +37,23 @@ import { SolanaAdapter, type ConnectionLike } from "@agentguard/sim-solana";
 import { ReputationService, StaticListProvider, createReputationRule, type ReputationProvider } from "@agentguard/reputation";
 import { REPUTATION_RULE, createServer, InMemoryAuditStore, withCustomRules } from "@agentguard/api";
 import { AgentGuardClient } from "@agentguard/sdk";
+
+// ---------------------------------------------------------------------------
+// Approver device fixture. In production this is a phone / HSM / hardware key the
+// agent cannot reach; here it is a key pair that only `trustedDevice.sign` touches.
+// Only the PUBLIC half is handed to the server (AGENTGUARD_APPROVER_KEYS).
+// ---------------------------------------------------------------------------
+function makeTrustedDevice(keyId: string) {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const publicKeyB64 = (publicKey.export({ type: "spki", format: "der" }) as Buffer).subarray(-32).toString("base64");
+  return { keyId, publicKeyB64, sign: (challenge: string) => edSign(null, Buffer.from(challenge, "utf8"), privateKey).toString("base64") };
+}
+
+/** Plain HTTP POST of an approval body (what `packages/api/scripts/approve.ts --url` does). Deliberately not an SDK method. */
+async function postApproval(baseUrl: string, apiKey: string, body: Record<string, unknown>) {
+  const res = await fetch(`${baseUrl}/v1/approvals`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": apiKey }, body: JSON.stringify(body) });
+  return { status: res.status, json: (await res.json()) as { error?: string; verdict?: string; approvalId?: string } };
+}
 
 // ---------------------------------------------------------------------------
 // EVM fixture: a mock viem-like client. USDC-ish token with 6 decimals, $1 each.
@@ -168,6 +189,7 @@ async function main() {
   const engine = new PolicyEngine({ customRules: { reputation: createReputationRule(reputation) } });
   const policy = withCustomRules(conservativeDefaultPolicy, [REPUTATION_RULE]);
 
+  const trustedDevice = makeTrustedDevice("ops-phone");
   const app = await createServer({
     engine,
     adapters: { evm, solana },
@@ -175,7 +197,8 @@ async function main() {
     defaultPolicyId: policy.id,
     audit: new InMemoryAuditStore(),
     reputation,
-    apiKeys: ["demo-key"],
+    apiKeys: [{ id: "demo-agent", key: "demo-key" }, { id: "approver-device", key: "approver-key" }],
+    approvers: [{ keyId: trustedDevice.keyId, publicKey: trustedDevice.publicKeyB64 }],
     logger: false,
   });
   const baseUrl = await app.listen({ port: 0, host: "127.0.0.1" });
@@ -252,11 +275,24 @@ async function main() {
     },
   );
 
+  cases.push({
+    name: "(h) escalated tx + human approval",
+    expect: "escalate",
+    before: () => { intelDown = false; reputation.clearCache(); },
+    intent: {
+      id: "00000000-0000-4000-8000-000000000011", chain: "evm", chainId: 1, from: AGENT, to: NEW_CONTRACT,
+      data: "0x4e71d92d", // claim()
+      description: "claim airdrop from new contract (needs a human)",
+    },
+  });
+
   const rows: Array<{ case: string; verdict: string; expected: string; riskScore: number; explanation: string }> = [];
   let failures = 0;
+  const approvalLog: string[] = [];
   for (const c of cases) {
     c.before?.();
-    const { decision } = await client.check(c.intent, c.context ?? context);
+    const res = await client.check(c.intent, c.context ?? context);
+    const { decision } = res;
     const ok = decision.verdict === c.expect;
     if (!ok) failures++;
     rows.push({
@@ -266,9 +302,51 @@ async function main() {
       riskScore: decision.riskScore,
       explanation: decision.explanation,
     });
+
+    if (c.name.startsWith("(h)") && decision.verdict === "escalate") {
+      // ---- Human approval (I-HITL). Nothing in this process can approve; only the device can. ----
+      const auditId = res.auditId;
+      const challenge = res.approval!.challenge;
+      approvalLog.push(`auditId ${auditId}`);
+      approvalLog.push(`challenge ${challenge} (expires ${res.approval!.expiresAt})`);
+      approvalLog.push(`status: ${(await client.getApprovalStatus(auditId)).status}`);
+
+      // 1. The agent, holding only its API key, tries to approve its own transaction with a key it made up.
+      const rogue = makeTrustedDevice("ops-phone"); // same key id, but not the registered key
+      const forged = await postApproval(baseUrl, "demo-key", { auditId, keyId: rogue.keyId, signature: rogue.sign(challenge), approvedAt: new Date().toISOString() });
+      if (forged.status === 200) {
+        approvalLog.push("agent self-approval: ACCEPTED  <-- MISMATCH");
+        failures++;
+      } else {
+        approvalLog.push(`agent self-approval: refused (HTTP ${forged.status} ${forged.json.error}); status: ${(await client.getApprovalStatus(auditId)).status}`);
+      }
+
+      // 2. A fresh check is needed (the forged attempt burned that challenge: fail closed); this time the
+      //    agent blocks in waitForApproval while the human signs on the trusted device.
+      const retry = await client.check({ ...c.intent, id: "00000000-0000-4000-8000-000000000012" }, context);
+      const waiting = client.waitForApproval(retry.auditId, { intervalMs: 50, timeoutMs: 10_000 });
+      const signed = { auditId: retry.auditId, keyId: trustedDevice.keyId, signature: trustedDevice.sign(retry.approval!.challenge), approvedAt: new Date().toISOString(), reason: "vendor confirmed the airdrop contract" };
+      const approvalRes = await postApproval(baseUrl, "approver-key", signed); // the device's own transport credential, separate from the agent's
+      const granted = await waiting;
+      const final = await client.getApprovalStatus(retry.auditId);
+      approvalLog.push(`new check ${retry.auditId}: device signed -> server ${approvalRes.json.verdict} (approvalId ${approvalRes.json.approvalId})`);
+      approvalLog.push(`waitForApproval resolved: ${granted.status} by ${granted.approvedBy}; status: ${final.status}`);
+      if (approvalRes.status !== 200 || final.status !== "approved" || granted.approvedBy !== trustedDevice.keyId) failures++;
+
+      // 3. Replaying the same signed approval is refused.
+      const replay = await postApproval(baseUrl, "approver-key", signed);
+      if (replay.status === 200) {
+        approvalLog.push("replay: ACCEPTED  <-- MISMATCH");
+        failures++;
+      } else {
+        approvalLog.push(`replay of the same approval: refused (HTTP ${replay.status}); status still ${(await client.getApprovalStatus(retry.auditId)).status}`);
+      }
+    }
   }
 
   printTable(rows);
+  console.log("\nHuman approval (I-HITL) for case (h):");
+  for (const l of approvalLog) console.log(`- ${l}`);
   await app.close();
   if (failures > 0) {
     console.error(`\n${failures} case(s) did not match the expected verdict`);

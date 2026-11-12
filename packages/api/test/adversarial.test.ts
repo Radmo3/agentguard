@@ -6,7 +6,7 @@
  * prompt-injected or compromised agent (T1/T2 in docs/THREAT_MODEL.md) or a
  * hostile counterparty (T3) could actually send.
  */
-import { randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomUUID, sign as edSign } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { encodeAbiParameters, encodeFunctionData, getAddress, type Hex } from "viem";
@@ -23,6 +23,7 @@ import { PolicyEngine, conservativeDefaultPolicy } from "@agentguard/policy";
 import { ReputationService, StaticListProvider, createReputationRule, type ReputationProvider } from "@agentguard/reputation";
 import { EvmAdapter, ERC20_ABI, type PublicClientLike } from "@agentguard/sim-evm";
 import { SolanaAdapter, type ConnectionLike } from "@agentguard/sim-solana";
+import { summarizeApprovals } from "../src/approvals.js";
 import { InMemoryAuditStore } from "../src/audit.js";
 import { computeSignature, signingKeyMaterial } from "../src/auth.js";
 import { BEHAVIOR_RULE, REPUTATION_RULE, withCustomRules } from "../src/bootstrap.js";
@@ -556,6 +557,112 @@ describe("adversarial: replay, audit tamper, behavior drift", () => {
 // ---------------------------------------------------------------------------
 // Property-style fuzz: 200 random intents, seeded PRNG
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Human approval channel (I-HITL): the agent holds an API key and nothing else.
+// ---------------------------------------------------------------------------
+function approverDevice(keyId: string) {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const raw = (publicKey.export({ type: "spki", format: "der" }) as Buffer).subarray(-32).toString("base64");
+  return { keyId, publicKey: raw, sign: (challenge: string) => edSign(null, Buffer.from(challenge, "utf8"), privateKey).toString("base64") };
+}
+
+describe("adversarial: agent reaches for the approval channel (T7)", () => {
+  const phone = approverDevice("ops-phone");
+  let s: Stack;
+  beforeEach(async () => { s = await buildStack({ approvers: [{ keyId: phone.keyId, publicKey: phone.publicKey }] }); });
+  afterEach(async () => s.app.close());
+
+  const escalatingBody = () => evmBody({ to: NEW_CONTRACT, data: "0x4e71d92d", description: "claim airdrop" });
+  const postApproval = (body: unknown) => s.app.inject({ method: "POST", url: "/v1/approvals", payload: body as Record<string, unknown>, headers: { "x-api-key": API_KEY } });
+  const status = async (auditId: string) => (await s.app.inject({ method: "GET", url: `/v1/approvals/${auditId}`, headers: { "x-api-key": API_KEY } })).json() as { status: string };
+
+  it("an agent process holding only the API key cannot mint an approval by any route", async () => {
+    const { json } = await post(s.app, escalatingBody());
+    expect(json.decision!.verdict).toBe("escalate");
+    const auditId = json.auditId!;
+    const challenge = (json as { approval?: { challenge: string } }).approval!.challenge;
+    expect(challenge).toMatch(/^[0-9a-f]{64}$/);
+    const approvedAt = new Date().toISOString();
+
+    const attempts: Array<{ name: string; body: unknown }> = [
+      { name: "self-generated key under the real approver's id", body: { auditId, keyId: phone.keyId, signature: approverDevice("x").sign(challenge), approvedAt } },
+      { name: "self-generated key under its own id", body: { auditId, keyId: "agent-self", signature: approverDevice("agent-self").sign(challenge), approvedAt } },
+      { name: "API key id as approver id", body: { auditId, keyId: "adv", signature: approverDevice("adv").sign(challenge), approvedAt } },
+      { name: "zero signature", body: { auditId, keyId: phone.keyId, signature: Buffer.alloc(64).toString("base64"), approvedAt } },
+      { name: "signature over the audit id instead of the challenge", body: { auditId, keyId: phone.keyId, signature: approverDevice("x").sign(auditId), approvedAt } },
+      { name: "verdict smuggled into the body", body: { auditId, keyId: phone.keyId, signature: approverDevice("x").sign(challenge), approvedAt, verdict: "allow" } },
+      { name: "status field smuggled into the body", body: { auditId, keyId: phone.keyId, signature: approverDevice("x").sign(challenge), approvedAt, status: "approved" } },
+    ];
+    for (const a of attempts) {
+      const res = await postApproval(a.body);
+      expect([400, 403], a.name).toContain(res.statusCode);
+      expect(res.json().verdict, a.name).toBeUndefined();
+      expect(res.json().approvalId, a.name).toBeUndefined();
+      // Generic bodies only: no hint about which check failed.
+      if (res.statusCode === 403) expect(res.json()).toEqual({ error: "approval_rejected", message: "approval could not be verified", requestId: expect.any(String) });
+    }
+    // The status endpoint cannot be written to.
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"] as const) {
+      const res = await s.app.inject({ method, url: `/v1/approvals/${auditId}`, payload: { status: "approved" }, headers: { "x-api-key": API_KEY } });
+      expect(res.statusCode, method).toBe(404);
+    }
+    expect((await status(auditId)).status).not.toBe("approved");
+
+    // The real device still cannot approve this one: the first forged attempt burned the challenge (fail closed).
+    const real = await postApproval({ auditId, keyId: phone.keyId, signature: phone.sign(challenge), approvedAt: new Date().toISOString() });
+    expect(real.statusCode).toBe(403);
+    expect((await status(auditId)).status).toBe("rejected");
+
+    // Every rejection is in the signed chain, linked to the check.
+    const chain = await s.audit.range(0, 1000);
+    expect(verifyChain(chain, { publicKeys: s.publicKeys, requireSignatures: true }).ok).toBe(true);
+    const prov = summarizeApprovals(chain);
+    expect(prov.length).toBeGreaterThanOrEqual(attempts.length - 2); // the two 400s (schema) are not audited
+    expect(prov.every((p) => p.type === "approval_rejected" && p.checkAuditId === auditId && p.problems.length === 0)).toBe(true);
+  });
+
+  it("a signature from the trusted device approves exactly the record it was issued for, once, and nothing else", async () => {
+    const a = await post(s.app, escalatingBody());
+    const b = await post(s.app, escalatingBody());
+    const [ca, cb] = [a, b].map((x) => (x.json as { approval?: { challenge: string } }).approval!.challenge);
+    expect(ca).not.toBe(cb); // same transaction, different audit record => different challenge
+
+    // The device's signature for A does not transfer to B (tampered auditId / replay across records).
+    const cross = await postApproval({ auditId: b.json.auditId, keyId: phone.keyId, signature: phone.sign(ca), approvedAt: new Date().toISOString() });
+    expect(cross.statusCode).toBe(403);
+    expect((await status(b.json.auditId!)).status).toBe("rejected");
+
+    // A itself is approved by the device, exactly once.
+    const ok = await postApproval({ auditId: a.json.auditId, keyId: phone.keyId, signature: phone.sign(ca), approvedAt: new Date().toISOString(), reason: "verified with the vendor" });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ verdict: "allow", auditId: a.json.auditId });
+    expect((await status(a.json.auditId!)).status).toBe("approved");
+    const replay = await postApproval({ auditId: a.json.auditId, keyId: phone.keyId, signature: phone.sign(ca), approvedAt: new Date().toISOString() });
+    expect(replay.statusCode).toBe(403);
+    expect((await status(a.json.auditId!)).status).toBe("approved");
+
+    const chain = await s.audit.range(0, 1000);
+    expect(verifyChain(chain, { publicKeys: s.publicKeys, requireSignatures: true }).ok).toBe(true);
+    const prov = summarizeApprovals(chain);
+    expect(prov.filter((p) => p.type === "approval")).toHaveLength(1);
+    expect(prov.find((p) => p.type === "approval")).toMatchObject({ checkAuditId: a.json.auditId, approverKeyId: "ops-phone", problems: [] });
+    // Tampering with the approval record after the fact is detected like any other record.
+    const approvalRec = chain.find((r) => r.type === "approval")!;
+    const forged = chain.map((r) => (r === approvalRec ? { ...r, approval: { ...r.approval!, checkAuditId: b.json.auditId! } } : r));
+    expect(verifyChain(forged, { publicKeys: s.publicKeys, requireSignatures: true }).ok).toBe(false);
+    expect(summarizeApprovals(forged).find((p) => p.type === "approval")!.problems).toContain("challenge_mismatch");
+  });
+
+  it("block decisions are never approvable, even by the trusted device", async () => {
+    const { json } = await post(s.app, evmBody({ data: approveData(ROUTER, UINT256_MAX) }));
+    expect(json.decision!.verdict).toBe("block");
+    expect((json as { approval?: unknown }).approval).toBeUndefined();
+    const res = await postApproval({ auditId: json.auditId, keyId: phone.keyId, signature: phone.sign("0".repeat(64)), approvedAt: new Date().toISOString() });
+    expect(res.statusCode).toBe(403);
+    expect((await status(json.auditId!)).status).toBe("unknown");
+  });
+});
+
 function mulberry32(seed: number) {
   let a = seed >>> 0;
   return () => {
