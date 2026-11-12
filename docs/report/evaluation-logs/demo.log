@@ -1,0 +1,36 @@
+
+> demo
+> tsx examples/demo.ts
+
+bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)
+case                                      verdict     expected   risk 
+----------------------------------------------------------------------
+(a) ERC-20 transfer 5 USDC                allow       allow      0    
+(b) unlimited approve                     block       block      65   
+(c) call unknown contract                 escalate    escalate   40   
+(d) Solana SPL transfer 2.5               allow       allow      0    
+(e) bounded approve to an EOA             block       block      50   
+(f) transfer to denylisted contract       block       block      40   
+(g) reputation provider outage            escalate    escalate   20   
+(h) escalated tx + human approval         escalate    escalate   40   
+
+Explanations:
+- (a) ERC-20 transfer 5 USDC: Transaction 00000000-0000-4000-8000-00000000000a from 0x1111111111111111111111111111111111111111 to 0x3333333333333333333333333333333333333333 on evm (agent's stated purpose: "pay supplier invoice #42") was allowed with risk score 0/100. No policy rules fired.
+- (b) unlimited approve: Transaction 00000000-0000-4000-8000-00000000000b from 0x1111111111111111111111111111111111111111 to 0x3333333333333333333333333333333333333333 on evm (agent's stated purpose: "approve router before swap") was blocked with risk score 65/100. Blocking rule: no-unlimited-approvals (no_unlimited_approvals): Transaction grants unlimited token approval(s): 0x3333333333333333333333333333333333333333 -> 0x4444444444444444444444444444444444444444. Simulation notes: simulation warnings: unlimited approval of 0x3333333333333333333333333333333333333333 to 0x4444444444444444444444444444444444444444; 1 unlimited approval(s).
+- (c) call unknown contract: Transaction 00000000-0000-4000-8000-00000000000c from 0x1111111111111111111111111111111111111111 to 0x9999999999999999999999999999999999999999 on evm (agent's stated purpose: "claim airdrop from new contract") was escalated for human review with risk score 40/100. Escalating rule: new-contracts (no_new_contracts): Transaction interacts with 1 contract(s) with no prior history: 0x9999999999999999999999999999999999999999. Simulation notes: simulation warnings: unknown function selector 0x4e71d92d; 1 new contract(s) touched.
+- (d) Solana SPL transfer 2.5: Transaction 00000000-0000-4000-8000-00000000000d from HrwRZqmZ7J2MbdFL8qG2To8c3jNDuu48CcwbjenhDN2t on solana (agent's stated purpose: "pay contractor in USDC") was allowed with risk score 0/100. No policy rules fired.
+- (e) bounded approve to an EOA: Transaction 00000000-0000-4000-8000-00000000000e from 0x1111111111111111111111111111111111111111 to 0x3333333333333333333333333333333333333333 on evm (agent's stated purpose: "let our ops wallet spend up to 50 USDC") was blocked with risk score 50/100. Blocking rule: no-eoa-approvals (no_eoa_approvals): Transaction grants token approval(s) to externally-owned account(s), which only a human or a drainer would call: 0x3333333333333333333333333333333333333333 -> 0x5555555555555555555555555555555555555555. Simulation notes: simulation warnings: approval to EOA 0x5555555555555555555555555555555555555555.
+- (f) transfer to denylisted contract: Transaction 00000000-0000-4000-8000-00000000000f from 0x1111111111111111111111111111111111111111 to 0x3333333333333333333333333333333333333333 on evm (agent's stated purpose: "pay invoice #43") was blocked with risk score 40/100. Blocking rule: reputation (custom): Reputation check flagged 1 address(es) as 0xbad0000000000000000000000000000000000bad (malicious, score 100, denylisted/drainer).
+- (g) reputation provider outage: Transaction 00000000-0000-4000-8000-000000000010 from 0x1111111111111111111111111111111111111111 to 0x3333333333333333333333333333333333333333 on evm (agent's stated purpose: "pay supplier invoice #44") was escalated for human review with risk score 20/100. Escalating rule: reputation (custom): Reputation data unavailable for 2 address(es) (provider error or timeout); failing closed. 2 address(es) have elevated or unknown risk: 0x3333333333333333333333333333333333333333 (unknown, score 50, not_listed/provider_error/provider_failed); 0x2222222222222222222222222222222222222222 (unknown, score 50, not_listed/provider_error/provider_failed).
+- (h) escalated tx + human approval: Transaction 00000000-0000-4000-8000-000000000011 from 0x1111111111111111111111111111111111111111 to 0x9999999999999999999999999999999999999999 on evm (agent's stated purpose: "claim airdrop from new contract (needs a human)") was escalated for human review with risk score 40/100. Escalating rule: new-contracts (no_new_contracts): Transaction interacts with 1 contract(s) with no prior history: 0x9999999999999999999999999999999999999999. Simulation notes: simulation warnings: unknown function selector 0x4e71d92d; 1 new contract(s) touched.
+
+Human approval (I-HITL) for case (h):
+- auditId ed39ec69-2026-41c9-8651-27de35e07b54
+- challenge f9a5eb0e3c93adea5f437c0c27ebd89b50f2a4ba21e6c4c5af91ac914ab43e96 (expires 2026-11-12T05:39:18.336Z)
+- status: pending
+- agent self-approval: refused (HTTP 403 approval_rejected); status: rejected
+- new check 7f0a3a46-ec71-4473-a843-c88c4769e247: device signed -> server allow (approvalId f15c5a45-9245-4e82-b5c2-ac3161ca740d)
+- waitForApproval resolved: approved by ops-phone; status: approved
+- replay of the same approval: refused (HTTP 403); status still approved
+
+All verdicts matched expectations.
