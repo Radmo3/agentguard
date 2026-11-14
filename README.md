@@ -294,6 +294,10 @@ An optional, separately licensed package. Each agent gets a profile learned only
 
 Hardening, key handling and the deployment checklist live in [SECURITY.md](SECURITY.md); the attacker models, STRIDE analysis and residual risks are in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). The fail-closed invariant is enforced by tests: `packages/api/test/failclosed.test.ts` (adapter/engine/breaker/audit failure matrix), `packages/api/test/integration.test.ts` (behavior/reputation outage, prefetch failure, persist failure) and `packages/api/test/adversarial.test.ts` (prompt injection through `description`/`metadata`, oversized and deeply nested payloads, trailing calldata, 2^256-1 / 2^255 / 2^200 / 2^64-1 approvals, approvals to EOAs, mixed-case denylisted recipients, Solana duplicate ComputeBudget + SetAuthority, HMAC replay, audit-chain tamper, learned-then-drain through the behavior integration (stubbed), and a 200-case seeded fuzz loop asserting no 500s and no `allow` on a failed simulation).
 
+## Experiments
+
+`experiments/cap-bypass/` ([README](experiments/cap-bypass/README.md)) reproduces the I-HITL cap-bypass study (arXiv:2610.35835: an agent with a 0.01 USDC daily cap, three one-cent invoices, the cap-raise OTP sitting in an inbox it can read, and an attacker e-mail posing as the owner) in simulation, with a `baseline` arm (the wallet's own policy, as in the study) and a `signhold` arm (every payment checked by the in-process API, policy held by the operator, escalations approved only by an approver-device fixture the agent cannot reach). Scripted agents run in CI (`npm run experiment:smoke`); Anthropic, OpenAI and OpenAI-compatible adapters run real models from an API key. The README lists every deviation from the paper's setup.
+
 ## Roadmap
 
 - Verified-source / TVL / known-exploit feeds as additional reputation providers (the `HttpProvider` adapter is the integration point); per-tenant baselines shared across agents of the same operator.

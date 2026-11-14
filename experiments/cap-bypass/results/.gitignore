@@ -1,0 +1,3 @@
+*.jsonl
+summary.json
+!.gitkeep

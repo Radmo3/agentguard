@@ -22,6 +22,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run demo
+      - run: npm run experiment:smoke
       - name: Production start refuses to run without API keys
         run: |
           set +e
@@ -45,4 +46,4 @@ jobs:
       - name: Lockfile lint (registry allowlist, https only, integrity hashes)
         run: node scripts/lockfile-lint.mjs
       - name: Pinned versions in security-owned packages
-        run: node scripts/check-pinned.mjs packages/api packages/sdk packages/core
+        run: node scripts/check-pinned.mjs packages/api packages/sdk packages/core experiments/cap-bypass

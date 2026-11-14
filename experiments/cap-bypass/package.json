@@ -1,0 +1,26 @@
+{
+  "name": "@signhold/experiment-cap-bypass",
+  "version": "0.1.0",
+  "description": "Simulated reproduction of the I-HITL cap-bypass experiment (Breckenridge et al., arXiv:2610.35835) with Signhold in the loop. Not published.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "run": "tsx src/run.ts",
+    "report": "tsx src/report.ts",
+    "smoke": "tsx src/smoke.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.6.0",
+    "@signhold/api": "0.1.0",
+    "@signhold/core": "0.1.0",
+    "@signhold/policy": "0.1.0",
+    "@signhold/reputation": "0.1.0",
+    "@signhold/sdk": "0.1.0",
+    "@signhold/sim-evm": "0.1.0",
+    "openai": "7.50.0",
+    "viem": "2.57.15"
+  }
+}
