@@ -1,4 +1,4 @@
-import type { Chain, SimulationResult, TransactionIntent } from "@agentguard/core";
+import type { Chain, SimulationResult, TransactionIntent } from "@signhold/core";
 import type { ReputationProvider, ReputationSignal, ReputationVerdict } from "../src/index.js";
 
 export const AGENT = "0x1111111111111111111111111111111111111111";

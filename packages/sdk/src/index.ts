@@ -1,5 +1,5 @@
-export { AgentGuardClient } from "./client.js";
-export type { AgentGuardClientOptions, ApprovalGranted, AuditPage, CheckOptions, FetchLike, WaitForApprovalOptions } from "./client.js";
+export { SignholdClient } from "./client.js";
+export type { SignholdClientOptions, ApprovalGranted, AuditPage, CheckOptions, FetchLike, WaitForApprovalOptions } from "./client.js";
 export { guard, ADVISORY_MODE_WARNING, __resetAdvisoryWarning } from "./guard.js";
 export type { ApprovalMode, EscalationInfo, GuardOptions, Guarded, IntentInput, SignerLike } from "./guard.js";
 export * from "./errors.js";
@@ -16,4 +16,4 @@ export type {
   Decision,
   TransactionIntent,
   Verdict,
-} from "@agentguard/core";
+} from "@signhold/core";

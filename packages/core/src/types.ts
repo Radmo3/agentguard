@@ -1,4 +1,4 @@
-// Shared contracts for AgentGuard. All packages import from here; never redefine.
+// Shared contracts for Signhold. All packages import from here; never redefine.
 
 export type Chain = "evm" | "solana";
 

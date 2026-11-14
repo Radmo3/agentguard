@@ -3,7 +3,7 @@ import { ACCOUNT_SIZE, AccountLayout, MINT_SIZE, MintLayout } from "@solana/spl-
 import {
   isUnlimitedApproval, toDecimal,
   type ApprovalChange, type AssetDelta, type ChainAdapter, type SimulationResult, type TransactionIntent,
-} from "@agentguard/core";
+} from "@signhold/core";
 import type { ConnectionLike } from "./connection.js";
 import {
   COMPUTE_BUDGET_PROGRAM_ID, TOKEN_PROGRAM_IDS, decodeInstruction, deserializeTransaction,

@@ -1,5 +1,5 @@
 {
-  "name": "@agentguard/api",
+  "name": "@signhold/api",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -19,17 +19,17 @@
     "verify-audit": "tsx scripts/verify-audit.ts"
   },
   "dependencies": {
-    "@agentguard/core": "0.1.0",
+    "@signhold/core": "0.1.0",
     "@fastify/rate-limit": "10.3.0",
     "fastify": "5.12.8",
     "pino": "10.4.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@agentguard/policy": "0.1.0",
-    "@agentguard/reputation": "0.1.0",
-    "@agentguard/sim-evm": "0.1.0",
-    "@agentguard/sim-solana": "0.1.0",
+    "@signhold/policy": "0.1.0",
+    "@signhold/reputation": "0.1.0",
+    "@signhold/sim-evm": "0.1.0",
+    "@signhold/sim-solana": "0.1.0",
     "@solana/spl-token": "^0.4.8",
     "@solana/web3.js": "^1.95.0",
     "viem": "^2.21.0"

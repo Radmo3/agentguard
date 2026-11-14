@@ -11,8 +11,8 @@
  * from a registered key is the only path, and it is single-use and time-boxed.
  */
 import { generateKeyPairSync, randomUUID, timingSafeEqual, verify as edVerify, type KeyObject } from "node:crypto";
-import type { ApprovalAuditData, ApprovalStatus, AuditRecord } from "@agentguard/core";
-import { CHALLENGE_RE, approvalMessageBytes, computeApprovalChallenge } from "@agentguard/core";
+import type { ApprovalAuditData, ApprovalStatus, AuditRecord } from "@signhold/core";
+import { CHALLENGE_RE, approvalMessageBytes, computeApprovalChallenge } from "@signhold/core";
 import { keyIdOf, loadEd25519PublicKey } from "./integrity.js";
 
 export const APPROVER_KEY_ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
@@ -28,7 +28,7 @@ export interface ApproverKeyConfig {
 }
 
 /**
- * Parse `AGENTGUARD_APPROVER_KEYS`: comma-separated `id:base64pub` entries
+ * Parse `SIGNHOLD_APPROVER_KEYS`: comma-separated `id:base64pub` entries
  * (hex and PEM-less SPKI base64 are accepted as well). Malformed entries abort
  * startup: an approval registry that silently drops a key is worse than none.
  */
@@ -37,9 +37,9 @@ export function parseApproverKeysEnv(raw: string | undefined): ApproverKeyConfig
   const out: ApproverKeyConfig[] = [];
   for (const entry of raw.split(",").map((s) => s.trim()).filter(Boolean)) {
     const idx = entry.indexOf(":");
-    if (idx <= 0 || idx === entry.length - 1) throw new Error(`AGENTGUARD_APPROVER_KEYS: entry must be '<keyId>:<base64 public key>'`);
+    if (idx <= 0 || idx === entry.length - 1) throw new Error(`SIGNHOLD_APPROVER_KEYS: entry must be '<keyId>:<base64 public key>'`);
     const keyId = entry.slice(0, idx);
-    if (!APPROVER_KEY_ID_RE.test(keyId)) throw new Error(`AGENTGUARD_APPROVER_KEYS: invalid key id '${keyId}' (must match ${APPROVER_KEY_ID_RE})`);
+    if (!APPROVER_KEY_ID_RE.test(keyId)) throw new Error(`SIGNHOLD_APPROVER_KEYS: invalid key id '${keyId}' (must match ${APPROVER_KEY_ID_RE})`);
     out.push({ keyId, publicKey: entry.slice(idx + 1) });
   }
   return out;

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { encodeFunctionData, encodeErrorResult, encodeAbiParameters, type Hex } from "viem";
-import { UINT256_MAX } from "@agentguard/core";
+import { UINT256_MAX } from "@signhold/core";
 import { EvmAdapter, ERC20_ABI, SWAP_ABI, type PublicClientLike, type CallArgs } from "../src/index.js";
 
 const AGENT = "0x1111111111111111111111111111111111111111";

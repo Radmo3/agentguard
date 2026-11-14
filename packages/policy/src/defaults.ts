@@ -1,4 +1,4 @@
-import type { PolicySet } from "@agentguard/core";
+import type { PolicySet } from "@signhold/core";
 
 /**
  * A conservative starting policy suitable for an autonomous agent with a small

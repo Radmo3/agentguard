@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { AuditRecord } from "@agentguard/core";
+import type { AuditRecord } from "@signhold/core";
 import { InMemoryAuditStore, JsonlAuditStore } from "../src/audit.js";
 import { okSimulation } from "./fakes.js";
 
@@ -39,7 +39,7 @@ describe("InMemoryAuditStore", () => {
 
 describe("JsonlAuditStore", () => {
   let dir: string;
-  beforeEach(async () => (dir = await mkdtemp(join(tmpdir(), "agentguard-audit-"))));
+  beforeEach(async () => (dir = await mkdtemp(join(tmpdir(), "signhold-audit-"))));
   afterEach(async () => rm(dir, { recursive: true, force: true }));
 
   it("appends one JSON line per record and reloads with bigints revived", async () => {

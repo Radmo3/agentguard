@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { Chain } from "@agentguard/core";
+import type { Chain } from "@signhold/core";
 import type { LookupOptions, ReputationProvider, ReputationSignal } from "../types.js";
 import { clampScore, makeSignal, normalizeAddress, sanitizeTags } from "../util.js";
 

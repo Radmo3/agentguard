@@ -1,5 +1,5 @@
 {
-  "name": "agentguard",
+  "name": "signhold",
   "private": true,
   "type": "module",
   "workspaces": [

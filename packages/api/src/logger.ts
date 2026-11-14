@@ -17,7 +17,7 @@ export const DEFAULT_REDACT_KEYS: readonly string[] = [
   "authorization",
   "cookie",
   "set-cookie",
-  "x-agentguard-signature",
+  "x-signhold-signature",
   "signature",
   "signingsecret",
   "signingSecret",

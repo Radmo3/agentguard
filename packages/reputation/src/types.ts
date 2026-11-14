@@ -1,4 +1,4 @@
-import type { Chain } from "@agentguard/core";
+import type { Chain } from "@signhold/core";
 
 /**
  * Reputation verdict for a single address/contract/program.

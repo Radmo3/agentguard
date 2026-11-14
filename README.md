@@ -1,49 +1,51 @@
-# AgentGuard
+# Signhold
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Node 22+](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json) [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)](tsconfig.base.json)
 
-AgentGuard is a transaction guardrail layer for AI agents that hold crypto wallets. Before an agent signs or broadcasts anything, it submits the proposed transaction to AgentGuard, which simulates it against live chain state, evaluates the simulated effects against an operator-defined policy, and returns `allow`, `block` or `escalate` with a human-readable explanation, a 0–100 risk score and an immutable audit record. Agents never get to decide for themselves whether a transaction is safe.
+> **Formerly AgentGuard.** Signhold was briefly published as AgentGuard (Nov 2026) and renamed to avoid a conflict with an unrelated registered trademark.
+
+Signhold is a transaction guardrail layer for AI agents that hold crypto wallets. Before an agent signs or broadcasts anything, it submits the proposed transaction to Signhold, which simulates it against live chain state, evaluates the simulated effects against an operator-defined policy, and returns `allow`, `block` or `escalate` with a human-readable explanation, a 0–100 risk score and an immutable audit record. Agents never get to decide for themselves whether a transaction is safe.
 
 It works on EVM chains and Solana, decodes the usual drain vectors (unlimited approvals, `setApprovalForAll`, permits, swaps with zero minimum output, SetAuthority, interactions with never-seen contracts), and ships with a conservative default policy plus a TypeScript SDK that wraps any signer so that `signTransaction` / `sendTransaction` are checked transparently.
 
-![AgentGuard demo: seven transactions checked through the SDK against the in-process API](docs/demo.gif)
+![Signhold demo: seven transactions checked through the SDK against the in-process API](docs/demo.gif)
 
-On top of the rule engine, a **contract reputation** layer (`@agentguard/reputation`, in this repo) aggregates allow/deny lists, on-chain heuristics (age, proxy, bytecode size) and optional external intel feeds, and an optional **behavioral anomaly** layer (`@agentguard/behavior`, separately licensed, see [What's open and what's not](#whats-open-and-whats-not)) scores each transaction against the agent's own learned baseline. Both plug into the same pipeline and both fail closed: an outage or an unreadable profile escalates, never allows.
+On top of the rule engine, a **contract reputation** layer (`@signhold/reputation`, in this repo) aggregates allow/deny lists, on-chain heuristics (age, proxy, bytecode size) and optional external intel feeds, and an optional **behavioral anomaly** layer (`@signhold/behavior`, separately licensed, see [What's open and what's not](#whats-open-and-whats-not)) scores each transaction against the agent's own learned baseline. Both plug into the same pipeline and both fail closed: an outage or an unreadable profile escalates, never allows.
 
 ## What's open and what's not
 
 Everything in this repository is open source under the [Apache License 2.0](LICENSE): the shared types, the policy engine and default policy, the EVM and Solana simulation adapters, the contract reputation layer, the HTTP API with its tamper-evident audit log, the SDK, the demo and all of the tests.
 
-The **behavioral anomaly layer** is not in this repository. It ships as a separately licensed package, `@agentguard/behavior`, that learns a per-agent baseline (counterparties, amounts, cadence, approvals) from allowed decisions and flags transactions that are out of character for that agent, for example a $95 transfer to a never-paid address from an agent whose history is 30 routine $5 payments, which no static rule catches. It plugs into the open core without any code change here:
+The **behavioral anomaly layer** is not in this repository. It ships as a separately licensed package, `@signhold/behavior`, that learns a per-agent baseline (counterparties, amounts, cadence, approvals) from allowed decisions and flags transactions that are out of character for that agent, for example a $95 transfer to a never-paid address from an agent whose history is 30 routine $5 payments, which no static rule catches. It plugs into the open core without any code change here:
 
 - `createServer()` accepts it through [`ServerOptions.behavior`](packages/api/src/types.ts) (`{ store, persist }`), and the engine takes its synchronous `behavior` custom rule like any other.
-- `bootstrap()` / `main.ts` load it dynamically when it is installed: `AGENTGUARD_PROFILE_FILE` selects the JSONL profile store (unset means in-memory), `AGENTGUARD_BEHAVIOR=false` turns the layer off. When the package is not installed the server logs `@agentguard/behavior not installed: behavioral anomaly detection disabled` and runs with the rules in this repo.
+- `bootstrap()` / `main.ts` load it dynamically when it is installed: `SIGNHOLD_PROFILE_FILE` selects the JSONL profile store (unset means in-memory), `SIGNHOLD_BEHAVIOR=false` turns the layer off. When the package is not installed the server logs `@signhold/behavior not installed: behavioral anomaly detection disabled` and runs with the rules in this repo.
 - The contract between the two is the `createBehaviorIntegration()` factory described by `BehaviorModuleLike` in `packages/api/src/types.ts`. The API tests exercise that contract, and the fail-closed behaviour around it, with an in-test stub ([`packages/api/test/behavior-stub.ts`](packages/api/test/behavior-stub.ts)), so you can run the whole suite without the private package. Anything with the same shape (your own anomaly model included) can be plugged in the same way.
 
-The `@agentguard/behavior` package lives at https://github.com/Radmo3/agentguard-behavior (private; contact the maintainers for licensing).
+The `@signhold/behavior` package lives at https://github.com/Radmo3/signhold-behavior (private; contact the maintainers for licensing).
 
 ## Architecture
 
 ```
                     +----------------------------------------------------+
-   AI agent         |                 AgentGuard API (Fastify)            |
+   AI agent         |                 Signhold API (Fastify)            |
  +-----------+      |                                                    |
  | signer    |      |  POST /v1/check                                    |
  |   wrapped |      |     |                                              |
  |   by      | ---> |     v                                              |
- | @agentguard/sdk  |  ChainAdapter.simulate(intent)                     |
- +-----------+      |     |   +-- @agentguard/sim-evm    (viem)          |
-                    |     |   +-- @agentguard/sim-solana (@solana/web3.js)|
+ | @signhold/sdk  |  ChainAdapter.simulate(intent)                     |
+ +-----------+      |     |   +-- @signhold/sim-evm    (viem)          |
+                    |     |   +-- @signhold/sim-solana (@solana/web3.js)|
                     |     v                                              |
                     |  SimulationResult { deltas, approvals, warnings,   |
                     |                     newContracts, ok }             |
                     |     |                                              |
                     |     |                                              |
-                    |     +--> @agentguard/reputation .prefetch()  (await)|
+                    |     +--> @signhold/reputation .prefetch()  (await)|
                     |     +--> ServerOptions.behavior store.get()  (await)|
-                    |          (optional: @agentguard/behavior, external) |
+                    |          (optional: @signhold/behavior, external) |
                     |     v                                              |
-                    |  @agentguard/policy PolicyEngine.evaluate(         |
+                    |  @signhold/policy PolicyEngine.evaluate(         |
                     |     {intent, simulation, context, policy})          |
                     |     |  built-in rules + custom "behavior" and       |
                     |     |  "reputation" rules (synchronous cache reads) |
@@ -53,7 +55,7 @@ The `@agentguard/behavior` package lives at https://github.com/Radmo3/agentguard
                     |                           --> persistOutcome()      |
                     +----------------------------------------------------+
                                    ^
-                                   |  shared types: @agentguard/core
+                                   |  shared types: @signhold/core
 ```
 
 Workspaces (`packages/*`): `core` (shared contracts), `policy` (rules + engine), `sim-evm`, `sim-solana`, `reputation` (address reputation providers + cache), `api`, `sdk`. `examples/` holds the end-to-end demo. The behavioral anomaly layer is an external package (see above).
@@ -75,27 +77,27 @@ The demo runs eight cases through the SDK against the in-process API: (a) small 
 Run the server against real RPC endpoints:
 
 ```bash
-export AGENTGUARD_EVM_RPC_URL=https://mainnet.base.org
-export AGENTGUARD_SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
-export AGENTGUARD_API_KEYS=ops-bot:secret-1,treasury:secret-2  # id:key pairs; required when NODE_ENV=production
-export AGENTGUARD_AUDIT_SIGNING_KEY=<ed25519 seed hex|base64|pkcs8 pem>  # required in production; dev generates an ephemeral key
-export AGENTGUARD_APPROVER_KEYS=ops-phone:<base64 ed25519 pub>,cfo-yubikey:<base64 ed25519 pub>  # human approver PUBLIC keys (see Human approval); private halves stay on the devices
-export AGENTGUARD_APPROVAL_TTL_MS=900000              # how long an escalation stays approvable (default 15 min)
-export AGENTGUARD_POLICY_FILE=./policy.json           # optional; defaults to conservativeDefaultPolicy
-export AGENTGUARD_AUDIT_FILE=./audit.jsonl            # optional; defaults to in-memory
-export AGENTGUARD_KNOWN_EVM_CONTRACTS=0xabc...,0xdef... # optional; enables new-contract detection
-export AGENTGUARD_KNOWN_SOLANA_PROGRAMS=Tokenkeg...,1111... # optional
-export AGENTGUARD_PROFILE_FILE=./profiles.jsonl       # behavior baselines (requires the external @agentguard/behavior package); unset => in-memory, lost on restart
-export AGENTGUARD_BEHAVIOR=true                        # false disables the behavior layer and its default-policy rule (no-op when the package is not installed)
-export AGENTGUARD_REPUTATION_ALLOWLIST=./allow.json    # optional comma-separated list files (see packages/reputation/data/*.json)
-export AGENTGUARD_REPUTATION_DENYLIST=./deny.json      # optional; denylisted addresses are `malicious` => block
-export AGENTGUARD_REPUTATION_HTTP_URL=                 # optional external intel feed; {address} {chain} {chainId} are substituted; JSON {verdict,score?,tags?}
-export AGENTGUARD_REPUTATION=true                      # false disables the reputation layer and its default-policy rule
-export AGENTGUARD_RATE_LIMIT_MAX=120                  # per key per AGENTGUARD_RATE_LIMIT_WINDOW_MS (default 60000); 0 disables
-export AGENTGUARD_REQUIRE_SIGNED_REQUESTS=false       # true => every request must carry an HMAC signature (see SECURITY.md)
-export AGENTGUARD_BODY_LIMIT_BYTES=65536              # max request body
-export AGENTGUARD_TRUST_PROXY=                        # false (default) | true | hop count | CIDR list
-export AGENTGUARD_CORS_ORIGINS=                       # unset => CORS disabled
+export SIGNHOLD_EVM_RPC_URL=https://mainnet.base.org
+export SIGNHOLD_SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+export SIGNHOLD_API_KEYS=ops-bot:secret-1,treasury:secret-2  # id:key pairs; required when NODE_ENV=production
+export SIGNHOLD_AUDIT_SIGNING_KEY=<ed25519 seed hex|base64|pkcs8 pem>  # required in production; dev generates an ephemeral key
+export SIGNHOLD_APPROVER_KEYS=ops-phone:<base64 ed25519 pub>,cfo-yubikey:<base64 ed25519 pub>  # human approver PUBLIC keys (see Human approval); private halves stay on the devices
+export SIGNHOLD_APPROVAL_TTL_MS=900000              # how long an escalation stays approvable (default 15 min)
+export SIGNHOLD_POLICY_FILE=./policy.json           # optional; defaults to conservativeDefaultPolicy
+export SIGNHOLD_AUDIT_FILE=./audit.jsonl            # optional; defaults to in-memory
+export SIGNHOLD_KNOWN_EVM_CONTRACTS=0xabc...,0xdef... # optional; enables new-contract detection
+export SIGNHOLD_KNOWN_SOLANA_PROGRAMS=Tokenkeg...,1111... # optional
+export SIGNHOLD_PROFILE_FILE=./profiles.jsonl       # behavior baselines (requires the external @signhold/behavior package); unset => in-memory, lost on restart
+export SIGNHOLD_BEHAVIOR=true                        # false disables the behavior layer and its default-policy rule (no-op when the package is not installed)
+export SIGNHOLD_REPUTATION_ALLOWLIST=./allow.json    # optional comma-separated list files (see packages/reputation/data/*.json)
+export SIGNHOLD_REPUTATION_DENYLIST=./deny.json      # optional; denylisted addresses are `malicious` => block
+export SIGNHOLD_REPUTATION_HTTP_URL=                 # optional external intel feed; {address} {chain} {chainId} are substituted; JSON {verdict,score?,tags?}
+export SIGNHOLD_REPUTATION=true                      # false disables the reputation layer and its default-policy rule
+export SIGNHOLD_RATE_LIMIT_MAX=120                  # per key per SIGNHOLD_RATE_LIMIT_WINDOW_MS (default 60000); 0 disables
+export SIGNHOLD_REQUIRE_SIGNED_REQUESTS=false       # true => every request must carry an HMAC signature (see SECURITY.md)
+export SIGNHOLD_BODY_LIMIT_BYTES=65536              # max request body
+export SIGNHOLD_TRUST_PROXY=                        # false (default) | true | hop count | CIDR list
+export SIGNHOLD_CORS_ORIGINS=                       # unset => CORS disabled
 export PORT=8787 LOG_LEVEL=info NODE_ENV=production
 node packages/api/dist/main.js
 ```
@@ -106,7 +108,7 @@ See [SECURITY.md](SECURITY.md) for key handling and the deployment hardening che
 
 ### `POST /v1/check`
 
-Headers: `content-type: application/json` (the only accepted type), `x-api-key: <key>` (when keys are configured), optionally `x-agentguard-signature` / `x-agentguard-timestamp` / `x-agentguard-nonce` for HMAC request signing (SDK: `signRequests: true`). All `bigint` fields are decimal strings. Bodies are validated strictly: unknown keys are rejected, `intent.id` must be a UUID, addresses are checked per chain, `description` ≤ 2 KB, `metadata` ≤ 8 KB serialized, calldata ≤ 128 KB, bodies ≤ 64 KB.
+Headers: `content-type: application/json` (the only accepted type), `x-api-key: <key>` (when keys are configured), optionally `x-signhold-signature` / `x-signhold-timestamp` / `x-signhold-nonce` for HMAC request signing (SDK: `signRequests: true`). All `bigint` fields are decimal strings. Bodies are validated strictly: unknown keys are rejected, `intent.id` must be a UUID, addresses are checked per chain, `description` ≤ 2 KB, `metadata` ≤ 8 KB serialized, calldata ≤ 128 KB, bodies ≤ 64 KB.
 
 Request:
 
@@ -184,11 +186,11 @@ Errors are always JSON with a `requestId`: `400 bad_request | unsupported_chain`
 ## SDK
 
 ```ts
-import { AgentGuardClient, guard, GuardBlockedError, GuardEscalatedError } from "@agentguard/sdk";
+import { SignholdClient, guard, GuardBlockedError, GuardEscalatedError } from "@signhold/sdk";
 
-const client = new AgentGuardClient({
-  baseUrl: "https://agentguard.internal",
-  apiKey: process.env.AGENTGUARD_KEY,
+const client = new SignholdClient({
+  baseUrl: "https://signhold.internal",
+  apiKey: process.env.SIGNHOLD_KEY,
   signRequests: true, // HMAC-sign every request (timestamp + nonce, 5-minute replay window)
 });
 
@@ -217,12 +219,12 @@ try {
 
 ## Human approval (I-HITL)
 
-An `escalate` verdict means "a human has to decide". The question raised by Vilardell et al. (*inalienable human-in-the-loop*, [arXiv:2610.35835](https://arxiv.org/abs/2610.35835)) is whether the human can be taken out of that loop by the agent. If approval is a callback in the agent's process, it can: the agent can call it, stub it, or just return `true`. AgentGuard therefore makes approval a cryptographic act that happens outside the agent's reach and is verified by the service:
+An `escalate` verdict means "a human has to decide". The question raised by Vilardell et al. (*inalienable human-in-the-loop*, [arXiv:2610.35835](https://arxiv.org/abs/2610.35835)) is whether the human can be taken out of that loop by the agent. If approval is a callback in the agent's process, it can: the agent can call it, stub it, or just return `true`. Signhold therefore makes approval a cryptographic act that happens outside the agent's reach and is verified by the service:
 
 ```
-          agent host (untrusted)             AgentGuard API (verifier)              approver device (trusted)
+          agent host (untrusted)             Signhold API (verifier)              approver device (trusted)
   ┌──────────────────────────────┐    ┌──────────────────────────────────┐    ┌────────────────────────────────┐
-  │ agent + @agentguard/sdk      │    │ POST /v1/check -> escalate       │    │ phone / HSM / hardware key /   │
+  │ agent + @signhold/sdk      │    │ POST /v1/check -> escalate       │    │ phone / HSM / hardware key /   │
   │ holds: API key               │───>│   challenge = sha256(canonical(  │    │ approve.ts on an ops laptop    │
   │                              │    │     v, auditId, intentHash,      │    │ holds: approver PRIVATE key    │
   │ can: submit checks, read     │    │     decisionHash, policy, agent, │    │                                │
@@ -247,16 +249,16 @@ An `escalate` verdict means "a human has to decide". The question raised by Vila
 
 How to run it:
 
-1. On the approver device: `npx tsx packages/api/scripts/approver-keygen.ts --id ops-phone --out ops-phone.key`. The private key stays there; the printed `AGENTGUARD_APPROVER_KEYS=ops-phone:<base64>` line goes to the server environment. Register as many devices as you have approvers; each gets its own id.
+1. On the approver device: `npx tsx packages/api/scripts/approver-keygen.ts --id ops-phone --out ops-phone.key`. The private key stays there; the printed `SIGNHOLD_APPROVER_KEYS=ops-phone:<base64>` line goes to the server environment. Register as many devices as you have approvers; each gets its own id.
 2. The agent runs behind `guard()` in the default server mode. On `escalate` it receives `auditId` and `challenge` (in `GuardEscalatedError`, in `onEscalationPending`, or in `client.check()`'s response) and can only pass them on.
-3. The human opens the audit record (`GET /v1/audit/:auditId`), checks the explanation and findings, and signs: `npx tsx packages/api/scripts/approve.ts --key ops-phone.key --key-id ops-phone --audit-id <auditId> --challenge <challenge> --record record.json --url https://agentguard --api-key <the device's own API key>`. With `--record`, the CLI recomputes the challenge from the record and refuses to sign if the two differ, so a challenge relayed through the agent cannot point at a different transaction.
+3. The human opens the audit record (`GET /v1/audit/:auditId`), checks the explanation and findings, and signs: `npx tsx packages/api/scripts/approve.ts --key ops-phone.key --key-id ops-phone --audit-id <auditId> --challenge <challenge> --record record.json --url https://signhold --api-key <the device's own API key>`. With `--record`, the CLI recomputes the challenge from the record and refuses to sign if the two differ, so a challenge relayed through the agent cannot point at a different transaction.
 4. The server verifies the signature against its registry, marks the approval used, appends an `approval` audit record linked to the check, and `GET /v1/approvals/:auditId` (or the SDK's `waitForApproval`) reports `approved`.
 
-Properties: single use (a replay is a `403` and an `approval_rejected` record), time-boxed (`AGENTGUARD_APPROVAL_TTL_MS`, default 15 minutes), only `escalate` decisions are approvable (`allow` needs none, `block` never gets one), any invalid attempt burns the challenge so the next request has to start from a fresh check, failures are a generic `403` with the reason only in logs and the audit chain, and `scripts/verify-audit.ts` shows every approval next to the check it refers to. What this does **not** yet give you: the service is still the verifier, so a compromised AgentGuard host could approve. Moving enforcement on-chain (a Safe guard module / Solana program that checks the approver signature itself) is the roadmap item; see docs/THREAT_MODEL.md, threat T7.
+Properties: single use (a replay is a `403` and an `approval_rejected` record), time-boxed (`SIGNHOLD_APPROVAL_TTL_MS`, default 15 minutes), only `escalate` decisions are approvable (`allow` needs none, `block` never gets one), any invalid attempt burns the challenge so the next request has to start from a fresh check, failures are a generic `403` with the reason only in logs and the audit chain, and `scripts/verify-audit.ts` shows every approval next to the check it refers to. What this does **not** yet give you: the service is still the verifier, so a compromised Signhold host could approve. Moving enforcement on-chain (a Safe guard module / Solana program that checks the approver signature itself) is the roadmap item; see docs/THREAT_MODEL.md, threat T7.
 
 ## Policy
 
-Policies are JSON, validated by `loadPolicy` from `@agentguard/policy`. Rule kinds: `max_tx_usd`, `max_window_usd`, `allowlist_only`, `denylist`, `no_unlimited_approvals`, `no_eoa_approvals`, `max_slippage_bps`, `no_new_contracts`, `require_simulation_ok`, `max_native_value`, `custom`. `onViolation` is `block` (default) or `escalate`; the strictest firing rule wins. "Unlimited" means any approval ≥ 2^128 base units, or exactly `u64::MAX` / `uint96::MAX`, so bounded-but-astronomical amounts (2^200, Permit2's `uint160` max) are caught too.
+Policies are JSON, validated by `loadPolicy` from `@signhold/policy`. Rule kinds: `max_tx_usd`, `max_window_usd`, `allowlist_only`, `denylist`, `no_unlimited_approvals`, `no_eoa_approvals`, `max_slippage_bps`, `no_new_contracts`, `require_simulation_ok`, `max_native_value`, `custom`. `onViolation` is `block` (default) or `escalate`; the strictest firing rule wins. "Unlimited" means any approval ≥ 2^128 base units, or exactly `u64::MAX` / `uint96::MAX`, so bounded-but-astronomical amounts (2^200, Permit2's `uint160` max) are caught too.
 
 ```json
 {
@@ -278,13 +280,13 @@ Policies are JSON, validated by `loadPolicy` from `@agentguard/policy`. Rule kin
 }
 ```
 
-The built-in `conservativeDefaultPolicy` ($100/tx, $500/window, no unlimited or EOA approvals, escalate on new contracts and >0.05 native) is used when no policy file is supplied; the server's bootstrap appends the `reputation` custom rule to it, and the `behavior` rule when the external `@agentguard/behavior` package is installed. A policy file is used verbatim: add the `custom` rules above to opt in (bootstrap logs a warning when a loaded policy omits a rule whose layer is active, and a policy that references a `custom` rule the engine does not have escalates with `engine_error` rather than silently passing).
+The built-in `conservativeDefaultPolicy` ($100/tx, $500/window, no unlimited or EOA approvals, escalate on new contracts and >0.05 native) is used when no policy file is supplied; the server's bootstrap appends the `reputation` custom rule to it, and the `behavior` rule when the external `@signhold/behavior` package is installed. A policy file is used verbatim: add the `custom` rules above to opt in (bootstrap logs a warning when a loaded policy omits a rule whose layer is active, and a policy that references a `custom` rule the engine does not have escalates with `engine_error` rather than silently passing).
 
-### Behavior layer (`@agentguard/behavior`, external)
+### Behavior layer (`@signhold/behavior`, external)
 
-An optional, separately licensed package. Each agent gets a profile learned only from **allowed** decisions (a blocked drain cannot teach the baseline); the rule scores a transaction against that profile synchronously from a store the API warms before `evaluate`, escalating at anomaly ≥ 50 and blocking at ≥ 85 by default (per-rule `params` override). Profiles persist to `AGENTGUARD_PROFILE_FILE` as JSONL with a per-agent hash-chained event log. Wiring details are in [What's open and what's not](#whats-open-and-whats-not); the failure modes (`behavior_error` escalation when the profile cannot be read, persist failures never changing a verdict) are enforced here, in `packages/api`, regardless of which implementation is plugged in.
+An optional, separately licensed package. Each agent gets a profile learned only from **allowed** decisions (a blocked drain cannot teach the baseline); the rule scores a transaction against that profile synchronously from a store the API warms before `evaluate`, escalating at anomaly ≥ 50 and blocking at ≥ 85 by default (per-rule `params` override). Profiles persist to `SIGNHOLD_PROFILE_FILE` as JSONL with a per-agent hash-chained event log. Wiring details are in [What's open and what's not](#whats-open-and-whats-not); the failure modes (`behavior_error` escalation when the profile cannot be read, persist failures never changing a verdict) are enforced here, in `packages/api`, regardless of which implementation is plugged in.
 
-### Reputation layer (`@agentguard/reputation`)
+### Reputation layer (`@signhold/reputation`)
 
 `ReputationService` fans a lookup out to providers with a per-provider timeout and aggregates with precedence malicious > suspicious > trusted > unknown. Providers: `StaticListProvider` (bundled seed of well-known contracts + operator allow/deny files; deny wins), `OnChainHeuristicsProvider` (EOA vs contract, bytecode size, EIP-1167/1967 proxies, contract age; Solana loader, upgrade authority, program age), `HttpProvider` (generic bounded-and-validated adapter for GoPlus/Blockaid-style APIs). In the default fail-closed mode a provider error or timeout lifts the risk floor, tags the result `provider_error`, and the policy rule escalates regardless of score. Results are LRU-cached with separate TTLs for conclusive, negative and errored lookups. The rule reads the cache synchronously, so the API awaits `prefetch(intent, simulation)` before every evaluate; a cache miss escalates with tag `not_prefetched`.
 
@@ -296,11 +298,11 @@ Hardening, key handling and the deployment checklist live in [SECURITY.md](SECUR
 
 - Verified-source / TVL / known-exploit feeds as additional reputation providers (the `HttpProvider` adapter is the integration point); per-tenant baselines shared across agents of the same operator.
 - SOC 2 controls for the hosted service: retention policies, per-tenant audit scoping, signed policy files, response signing (tamper-evident audit log and key rotation shipped in 0.1).
-- Custody integrations: Fireblocks policy-engine hooks and Safe (Gnosis) guard module so AgentGuard sits inline with institutional signing. For human approval (I-HITL) specifically, the Safe guard / Solana program would verify the approver's Ed25519 signature over the escalation challenge on-chain, so that neither the agent host nor the AgentGuard service can execute an escalated transaction without it; today the service is the verifier (see docs/THREAT_MODEL.md, T7).
+- Custody integrations: Fireblocks policy-engine hooks and Safe (Gnosis) guard module so Signhold sits inline with institutional signing. For human approval (I-HITL) specifically, the Safe guard / Solana program would verify the approver's Ed25519 signature over the escalation challenge on-chain, so that neither the agent host nor the Signhold service can execute an escalated transaction without it; today the service is the verifier (see docs/THREAT_MODEL.md, T7).
 
 ## Contributing and license
 
 Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) (build, test, DCO sign-off) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Vulnerabilities go to the process in [SECURITY.md](SECURITY.md), never to a public issue.
 
-AgentGuard is licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE) for attribution. The `@agentguard/behavior` package is proprietary and is not covered by this license.
+Signhold is licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE) for attribution. The `@signhold/behavior` package is proprietary and is not covered by this license.
 

@@ -1,4 +1,4 @@
-# AgentGuard Threat Model
+# Signhold Threat Model
 
 Status: living document, owned by the security engineer. Update it with every
 change to `packages/api`, `packages/sdk` or the request/audit schemas.
@@ -7,9 +7,9 @@ change to `packages/api`, `packages/sdk` or the request/audit schemas.
 
 ```
                  trust boundary A            trust boundary B              trust boundary C
-   (agent process)        |     (network)        |     (AgentGuard API)        |     (chain RPC)
+   (agent process)        |     (network)        |     (Signhold API)        |     (chain RPC)
                           |                      |                             |
- LLM/agent ──► @agentguard/sdk ──HTTP(S)──► Fastify ─► validate ─► adapter.simulate ──► RPC node
+ LLM/agent ──► @signhold/sdk ──HTTP(S)──► Fastify ─► validate ─► adapter.simulate ──► RPC node
    │               guard(signer)           auth/HMAC   zod strict      (circuit breaker)
    │                                       rate limit      │
    │                                                       ├─► reputation.prefetch ──► list files / RPC / intel HTTP
@@ -25,7 +25,7 @@ change to `packages/api`, `packages/sdk` or the request/audit schemas.
                                              behavior.persist (profile + chained events; optional)
 
                                                    trust boundary E
-   (approver device: phone / HSM / hardware key / approve.ts)   |   (AgentGuard API)
+   (approver device: phone / HSM / hardware key / approve.ts)   |   (Signhold API)
                                                                  |
  human ──► signs challenge with approver PRIVATE key ──HTTP(S)──► POST /v1/approvals ─► ApproverRegistry.verify
                        (never on the agent host)                       auth, rate limit        (public keys only)
@@ -33,11 +33,11 @@ change to `packages/api`, `packages/sdk` or the request/audit schemas.
    agent ◄── GET /v1/approvals/:auditId (read-only) ◄──────────────────────┴─► AuditStore: approval / approval_rejected
 ```
 
-`behavior.*` refers to the optional, separately licensed `@agentguard/behavior`
+`behavior.*` refers to the optional, separately licensed `@signhold/behavior`
 package plugged in through `ServerOptions.behavior`; without it those two steps
 are skipped and the engine runs the built-in and reputation rules only.
 
-AgentGuard does **not** hold wallet keys. Its job is to return a verdict that
+Signhold does **not** hold wallet keys. Its job is to return a verdict that
 the SDK enforces before the agent's signer is invoked, and to leave a record
 that cannot be silently altered.
 
@@ -48,15 +48,15 @@ that cannot be silently altered.
 | A1. Verdict integrity | A wrong `allow` lets funds leave the wallet | `POST /v1/check` pipeline, `guard()` |
 | A2. Audit log | Forensics, compliance, dispute resolution; must be complete and tamper-evident | `AuditStore` (memory/JSONL), `integrity` envelope |
 | A3. API keys | Authenticate agents; stolen key lets an attacker submit checks under a victim's identity and read its audit history | `ApiKeyring` (hashes only), client env |
-| A4. Audit signing key (Ed25519) | Forging signatures = forging history | `AGENTGUARD_AUDIT_SIGNING_KEY` |
+| A4. Audit signing key (Ed25519) | Forging signatures = forging history | `SIGNHOLD_AUDIT_SIGNING_KEY` |
 | A5. Policy | Encodes operator's risk appetite; weakening it is equivalent to disabling the product | policy file on disk, loaded at boot |
 | A6. Transaction payloads | Calldata/raw tx may contain permits, memos, counterparties; confidentiality and non-leakage into logs | request bodies, debug logs |
 | A7. Service availability | Agents fail closed when the API is down, so DoS = denial of business, not loss of funds | Fastify process, RPC dependencies |
-| A8. RPC trust | Simulation is only as honest as the node | `AGENTGUARD_*_RPC_URL` |
-| A9. Behavioral baselines (external `@agentguard/behavior` package, when installed) | A poisoned profile makes a drain look "normal"; a deleted one resets to cold start (lower confidence, not fail-open) | `AGENTGUARD_PROFILE_FILE`, in-memory store |
-| A10. Reputation lists and feeds | A removed deny entry or a lying intel feed un-flags a known drainer | `AGENTGUARD_REPUTATION_*`, `data/trusted-seed.json`, upstream HTTP |
+| A8. RPC trust | Simulation is only as honest as the node | `SIGNHOLD_*_RPC_URL` |
+| A9. Behavioral baselines (external `@signhold/behavior` package, when installed) | A poisoned profile makes a drain look "normal"; a deleted one resets to cold start (lower confidence, not fail-open) | `SIGNHOLD_PROFILE_FILE`, in-memory store |
+| A10. Reputation lists and feeds | A removed deny entry or a lying intel feed un-flags a known drainer | `SIGNHOLD_REPUTATION_*`, `data/trusted-seed.json`, upstream HTTP |
 | A11. Approver private keys (Ed25519) | The only thing that can turn `escalate` into an approval; whoever holds one is "the human" | Approver devices only (phone keystore, HSM, hardware key, `approve.ts` on an operator laptop). Never the agent host, never the API host |
-| A12. Approval registry and pending challenges | A key added to the registry becomes an approver; a challenge that can be replayed or re-bound approves the wrong thing | `AGENTGUARD_APPROVER_KEYS` (public halves), `PendingApprovalStore` (server memory), `approvalRequest` sealed in the check record |
+| A12. Approval registry and pending challenges | A key added to the registry becomes an approver; a challenge that can be replayed or re-bound approves the wrong thing | `SIGNHOLD_APPROVER_KEYS` (public halves), `PendingApprovalStore` (server memory), `approvalRequest` sealed in the check record |
 
 ## 3. Trust boundaries
 
@@ -107,11 +107,11 @@ left after the mitigation, so operators know what they still own.
 | Hide the real recipient behind a trusted token contract (`transfer(denylisted, x)` with `to = USDC`) | T2, T3 | Adapters decode fund recipients into `SimulationResult.recipients` (ERC-20 transfer/transferFrom targets, swap recipients, SPL destinations and owners, `SetAuthority` new authorities); `denylist`, `allowlist_only`, behavior and reputation all treat them as counterparties (`adversarial.test.ts`) | Recipients reachable only through undecoded internal calls need a trace-capable RPC (`traceCall`) |
 | Bounded-but-astronomical approval that dodges the "unlimited" check (2^200, `uint160::MAX`) | T2, T3 | `isUnlimitedApproval` treats ≥ 2^128, `u64::MAX` and `uint96::MAX` as unlimited | Approvals between the real balance and 2^128 are governed by `max_tx_usd` only when the spender later spends; prefer `allowlist_only` for spenders |
 | Approve a bounded amount to an EOA the attacker controls | T2 | `no_eoa_approvals` (default policy, block) using `ApprovalChange.spenderIsContract` from `getCode` | A contract wallet spender with code is not an EOA; reputation/allowlist govern it |
-| Teach the behavioral baseline by submitting many "normal-looking" transactions, or by replaying blocked ones (external `@agentguard/behavior` package) | T1, T2 | The API hands every sealed decision to `behavior.persist`; the package only lets `allow` decisions update counterparties/amount stats, while blocked/escalated ones only extend the verdict history (which raises the next score). Learning requires the transactions to actually pass policy, so a patient attacker is bounded by the hard caps per transaction and per window | Slow drift over weeks within caps; mitigate with periodic baseline review and that package's `verifyEventChain` |
+| Teach the behavioral baseline by submitting many "normal-looking" transactions, or by replaying blocked ones (external `@signhold/behavior` package) | T1, T2 | The API hands every sealed decision to `behavior.persist`; the package only lets `allow` decisions update counterparties/amount stats, while blocked/escalated ones only extend the verdict history (which raises the next score). Learning requires the transactions to actually pass policy, so a patient attacker is bounded by the hard caps per transaction and per window | Slow drift over weeks within caps; mitigate with periodic baseline review and that package's `verifyEventChain` |
 | Rewrite a profile on disk | T4 | Per-agent sha256-chained event log; stores refuse rollbacks (`eventSeq` must not decrease) and invalid snapshots | A rewrite that also regenerates the chain is undetectable without an external anchor (same residual as audit tail truncation) |
 | Make the reputation layer fail open (provider down, cache cold, TTL expiry between prefetch and evaluate) | T3, T6 | `failMode: "closed"` lifts score and tags `provider_error`; the rule escalates on those tags regardless of score (`escalateOnProviderError`) and on cache misses (`not_prefetched`); the API escalates if `prefetch` itself throws (`reputation_error`) | A compromised feed that answers `trusted` for a drainer; keep the operator denylist authoritative (deny wins) |
 | Prototype pollution / mass assignment through JSON body | T2, T6 | `z.object().strict()` at every level, discriminated union by chain, bounded sizes (`serialization.ts`); `JSON.parse` only, no revivers | None known |
-| Oversized or hostile payloads (zip-bomb-style strings, 10 MB calldata) | T6 | 64 KiB body limit (`bodyLimit`), calldata ≤ 128 KiB hex, description ≤ 2 KiB, metadata ≤ 8 KiB serialised, list ≤ 1000, strings regex-bounded; zod 4.6.7 fixes the oversized-collection DoS | Operators who raise `AGENTGUARD_BODY_LIMIT_BYTES` |
+| Oversized or hostile payloads (zip-bomb-style strings, 10 MB calldata) | T6 | 64 KiB body limit (`bodyLimit`), calldata ≤ 128 KiB hex, description ≤ 2 KiB, metadata ≤ 8 KiB serialised, list ≤ 1000, strings regex-bounded; zod 4.6.7 fixes the oversized-collection DoS | Operators who raise `SIGNHOLD_BODY_LIMIT_BYTES` |
 | Poison the SDK or API supply chain | T1 | Exact-pinned dependencies in api/sdk/core (`scripts/check-pinned.mjs`), lockfile registry/integrity lint (`scripts/lockfile-lint.mjs`), `npm audit` gate with reviewed exceptions, `npm ci --ignore-scripts` in CI | Upstream compromise of a pinned version; review `.audit-exceptions.json` on schedule |
 
 ### Repudiation
@@ -121,7 +121,7 @@ left after the mitigation, so operators know what they still own.
 | Agent denies having submitted a transaction | T1 | `principal.apiKeyId`, `requestId`, `signed` flag in each record; intent id must be a UUID so records are individually addressable | Shared keys destroy attribution; one key per agent is policy |
 | Operator denies a verdict was given | T4 | Signed, chained records; the SDK receives `auditId` which the agent can retain | Dev deployments with ephemeral signing keys |
 | Silent "lost" decisions | T4, software bugs | Audit write happens before the verdict is returned; failure returns `503 audit_unavailable` and the SDK refuses to sign (`failclosed.test.ts`) | None |
-| Signing key compromise lets an insider re-sign a rewritten history | T4 | Key must come from a secrets manager in production; `keyId` fingerprints allow rotation and revocation lists via `AGENTGUARD_AUDIT_PUBLIC_KEYS` | Full key compromise + full file rewrite is detectable only via an external anchor of `headHash` |
+| Signing key compromise lets an insider re-sign a rewritten history | T4 | Key must come from a secrets manager in production; `keyId` fingerprints allow rotation and revocation lists via `SIGNHOLD_AUDIT_PUBLIC_KEYS` | Full key compromise + full file rewrite is detectable only via an external anchor of `headHash` |
 
 ### Information disclosure
 
@@ -148,11 +148,11 @@ left after the mitigation, so operators know what they still own.
 
 | Threat | Attacker | Mitigation | Residual |
 | --- | --- | --- | --- |
-| Bypass `guard()` and call the signer directly | T1 | Out of scope for the SDK: a compromised agent process owns its signer. Mitigation is architectural: keep keys in a custody system that enforces AgentGuard server-side (roadmap: Fireblocks / Safe guard module) | **Primary residual risk of the whole design.** Documented in README roadmap |
+| Bypass `guard()` and call the signer directly | T1 | Out of scope for the SDK: a compromised agent process owns its signer. Mitigation is architectural: keep keys in a custody system that enforces Signhold server-side (roadmap: Fireblocks / Safe guard module) | **Primary residual risk of the whole design.** Documented in README roadmap |
 | Make the SDK proceed on a non-`allow` verdict | T1, T2 | `guard()` proceeds only on literal `allow`, or on `escalate` once `client.waitForApproval` has seen the server report literal `approved` (with `approvedBy` and `approvalId`); every other value, status or exception blocks (`guard.ts`, `sdk/test/failclosed.test.ts`, `sdk/test/approval.test.ts`) | The SDK runs in the agent's process (see "bypass `guard()`") |
 | Approve an escalation from inside the agent process: call, stub or simulate the approval step | T7 | Server mode (default) has no local approval path at all: `guard()` refuses `onEscalate` unless `approval: "callback"` is set explicitly, captures the mode at construction so a later mutation of the options cannot inject a callback, and `onEscalationPending`'s return value is ignored; the approval exists only as a server-verified signature the process cannot produce. Advisory mode is documented as not I-HITL and warns once at startup (`guard.ts`, `sdk/test/approval.test.ts`) | Integrators who opt into `approval: "callback"` for a funded signer; treat that like disabling the product |
 | Mislead the human into signing: relay a challenge with a benign-looking description, or a challenge for a different transaction | T2, T7 | The human approves an audit record, not a message from the agent: `approve.ts --record` recomputes the challenge from the sealed record and prints the explanation and findings; `description` reaches the explanation only as an escaped, capped string literal labelled "agent's stated purpose" | A reviewer who signs on the agent's say-so without opening the record; approval UIs must display the record, never the agent's summary |
-| Compromise the AgentGuard host and approve from there (or add a key to the registry) | T4 | Registry is read at boot from the operator's environment; approval records carry `principal.approverKeyId` and are signed into the chain, so a host-minted approval is attributable in forensics | **Residual: service-side verification trusts the service.** A root on the API host can call the approval path with any key. Roadmap: on-chain enforcement, i.e. a Safe guard module / Solana program that itself verifies the approver's Ed25519 signature over the challenge before the transaction can execute, so neither the agent host nor the AgentGuard host can execute an escalated transaction without the human's device |
+| Compromise the Signhold host and approve from there (or add a key to the registry) | T4 | Registry is read at boot from the operator's environment; approval records carry `principal.approverKeyId` and are signed into the chain, so a host-minted approval is attributable in forensics | **Residual: service-side verification trusts the service.** A root on the API host can call the approval path with any key. Roadmap: on-chain enforcement, i.e. a Safe guard module / Solana program that itself verifies the approver's Ed25519 signature over the challenge before the transaction can execute, so neither the agent host nor the Signhold host can execute an escalated transaction without the human's device |
 | Make the API return `allow` via an exception path | T3, bugs | Every error path produces `escalate`; engine output is validated (`validateDecision`); adapter output validated; `api/test/failclosed.test.ts` enumerates throw/garbage/timeout cases for each component | New code paths must add to that matrix |
 | Use `policyId` to select a weaker policy | T2 | Only policies loaded by the operator can be referenced; unknown ids 404. The default policy is the loaded file | If an operator loads a permissive policy alongside a strict one, an injected agent can pick it. Load one policy per deployment, or enforce policy per key (roadmap) |
 | Exploit Fastify/pino/zod vulnerabilities | T6 | Pinned versions, audit gate, minimal plugin surface (only `@fastify/rate-limit`), `x-powered-by` removed, `default-src 'none'` CSP, `nosniff`, `no-store` | Zero-days; keep the audit gate green |
@@ -180,8 +180,8 @@ their device and choosing to sign it (T7 in section 5).
 
 ## 7. Residual risks (ranked)
 
-1. **Agent-side bypass of the SDK** (T1). AgentGuard is advisory until signing is moved behind a custody layer that calls the API itself. Human approval is now inalienable with respect to the agent (T7: the agent cannot produce or simulate an approval), but the *enforcement* of "no approval, no signature" still happens in the agent's process.
-2. **Service-side verification trusts the service** (T7/T4). Approvals are verified by the AgentGuard host; a compromise of that host can mint one. On-chain enforcement (a Safe guard module / Solana program verifying the approver signature over the challenge) is the roadmap item that removes this trust. Pending approvals are also held in memory, so a restart invalidates them (fail closed, but operationally visible).
+1. **Agent-side bypass of the SDK** (T1). Signhold is advisory until signing is moved behind a custody layer that calls the API itself. Human approval is now inalienable with respect to the agent (T7: the agent cannot produce or simulate an approval), but the *enforcement* of "no approval, no signature" still happens in the agent's process.
+2. **Service-side verification trusts the service** (T7/T4). Approvals are verified by the Signhold host; a compromise of that host can mint one. On-chain enforcement (a Safe guard module / Solana program verifying the approver signature over the challenge) is the roadmap item that removes this trust. Pending approvals are also held in memory, so a restart invalidates them (fail closed, but operationally visible).
 3. **Simulation blind spots** (T3). State-dependent or MEV-sensitive behaviour can differ between simulation and inclusion. Compensate with small caps, allowlists and private RPC.
 4. **Response-leg integrity depends on TLS** (T5). Request signing exists; response signing does not yet.
 5. **Audit tail truncation** (T4). Detectable only with an external anchor of `headHash`. Export it periodically.
@@ -200,7 +200,7 @@ their device and choosing to sign it (T7 in section 5).
 - `packages/api/test/approval.test.ts`: escalation binding (challenge sealed into the record, recomputable, changes with every bound field, absent for allow/block), happy path, wrong key, unregistered key, signature over another challenge, tampered `auditId`, unknown `auditId`, `approvedAt` outside the window, expiry, replay, concurrent submissions (exactly one wins), approvals for `block`/`allow` refused, malformed bodies (400, no audit record, challenge not burned), auth + rate limit on the route, audit-store failure during approval (503, claim burned), status transitions and read-only status route, registry parsing and key separation, pending-store bounds, and the device tooling end to end (`approver-keygen.ts` → `approve.ts --record` refusing a mismatched challenge → `verify-audit.ts` listing check → approval → rejected replay, then detecting a re-pointed approval).
 - `packages/sdk/test/approval.test.ts`: `waitForApproval` resolves only on literal `approved` with `approvedBy`/`approvalId`, times out, treats `expired`/`rejected`/`unknown` and malformed bodies as denial; `guard()` server mode throws with `auditId` + `challenge`, refuses `onEscalate`, ignores callbacks injected after construction, never approves through `onEscalationPending`, signs only after the server reports `approved`; advisory mode warns once and is opt-in only.
 - `packages/api/test/adversarial.test.ts`: "agent reaches for the approval channel" (self-signed approvals under the real approver's id, smuggled `verdict`/`status` fields, writes to the status route, the device's signature not transferring between records, replay, `block` never approvable, provenance intact and tamper-detected), prompt injection via `description`/`metadata`, oversized/nested metadata, trailing calldata, approval amount ladder (2^256-1 … 2^64-1), EOA approvals, mixed-case denylisted recipients, Solana ComputeBudget + SetAuthority, HMAC replay, audit tamper, learned-then-drain, blocked-tx baseline poisoning, 200-case seeded fuzz (no 500, no `allow` on `ok=false`, chain intact).
-- Scoring, cold start, feature calibration, profile/event chain integrity and store rollback refusal of the behavioral layer are tested in the external `@agentguard/behavior` package's own suite.
+- Scoring, cold start, feature calibration, profile/event chain integrity and store rollback refusal of the behavioral layer are tested in the external `@signhold/behavior` package's own suite.
 - `packages/reputation/test/*`: aggregation precedence, fail-closed on error/timeout, cache TTLs, HTTP provider bounds (size, depth, status), on-chain heuristics.
 - `packages/sdk/test/signing.test.ts`, `packages/sdk/test/failclosed.test.ts`: SDK signing parity with the server and fail-closed behaviour of `guard()`.
 - CI: `npm audit --omit=dev --audit-level=high` (with reviewed exceptions), lockfile lint, pinned-version check, production boot refusal.

@@ -15,8 +15,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import type { AuditRecord } from "@agentguard/core";
-import { computeApprovalChallenge } from "@agentguard/core";
+import type { AuditRecord } from "@signhold/core";
+import { computeApprovalChallenge } from "@signhold/core";
 import { ApproverRegistry, PendingApprovalStore, parseApproverKeysEnv, summarizeApprovals } from "../src/approvals.js";
 import { InMemoryAuditStore, JsonlAuditStore } from "../src/audit.js";
 import { createEd25519Signer, keyIdOf, loadEd25519PublicKey, verifyChain } from "../src/integrity.js";
@@ -402,7 +402,7 @@ describe("GET /v1/approvals/:auditId", () => {
 });
 
 describe("approver key registry", () => {
-  it("parses AGENTGUARD_APPROVER_KEYS and refuses malformed entries", () => {
+  it("parses SIGNHOLD_APPROVER_KEYS and refuses malformed entries", () => {
     const a = device("a"), b = device("b.c-d_e");
     const parsed = parseApproverKeysEnv(` a:${a.publicKeyB64}, ${b.keyId}:${b.publicKeyB64} `);
     expect(parsed.map((k) => k.keyId)).toEqual(["a", "b.c-d_e"]);
@@ -475,12 +475,12 @@ describe("approver tooling (the 'trusted device') end to end", () => {
   });
 
   it("keygen -> escalate -> approve.ts refuses a mismatched challenge, signs the right one -> verify-audit lists the provenance", async () => {
-    dir = await mkdtemp(join(tmpdir(), "agentguard-approver-"));
+    dir = await mkdtemp(join(tmpdir(), "signhold-approver-"));
     const keyFile = join(dir, "ops-phone.key");
 
     // 1. Key generation happens on the device; only the public half goes to the server.
     const gen = await execFileP(tsx, [script("approver-keygen.ts"), "--id", "ops-phone", "--out", keyFile]);
-    const envLine = /AGENTGUARD_APPROVER_KEYS=(\S+)/.exec(gen.stdout)![1];
+    const envLine = /SIGNHOLD_APPROVER_KEYS=(\S+)/.exec(gen.stdout)![1];
     expect(gen.stdout).not.toContain("PRIVATE KEY-----"); // the private key went to the file, not stdout
     expect(await readFile(keyFile, "utf8")).toContain("-----BEGIN PRIVATE KEY-----");
     const approvers = parseApproverKeysEnv(envLine);

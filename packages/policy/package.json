@@ -1,5 +1,5 @@
 {
-  "name": "@agentguard/policy",
+  "name": "@signhold/policy",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -17,7 +17,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agentguard/core": "0.1.0",
+    "@signhold/core": "0.1.0",
     "zod": "^3.23.8"
   }
 }

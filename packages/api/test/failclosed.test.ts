@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import type { AuditRecord, Decision } from "@agentguard/core";
+import type { AuditRecord, Decision } from "@signhold/core";
 import { InMemoryAuditStore } from "../src/audit.js";
 import { AdapterUnavailableError, CircuitBreakerAdapter } from "../src/breaker.js";
 import { createServer } from "../src/server.js";

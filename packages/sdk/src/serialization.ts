@@ -6,8 +6,8 @@ import type {
   Decision,
   SimulationResult,
   TransactionIntent,
-} from "@agentguard/core";
-import { bigintReplacer } from "@agentguard/core";
+} from "@signhold/core";
+import { bigintReplacer } from "@signhold/core";
 
 /** Serialise a request payload: bigints -> decimal strings, Dates -> ISO. */
 export function serializeRequest(value: unknown): string {

@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import type { AuditRecord } from "@agentguard/core";
-import { canonicalJson, sha256Hex } from "@agentguard/core";
+import type { AuditRecord } from "@signhold/core";
+import { canonicalJson, sha256Hex } from "@signhold/core";
 import { InMemoryAuditStore, JsonlAuditStore } from "../src/audit.js";
 import {
   GENESIS_HASH,
@@ -120,7 +120,7 @@ describe("sealRecord / verifyChain", () => {
 
 describe("chained audit stores", () => {
   let dir: string;
-  beforeEach(async () => (dir = await mkdtemp(join(tmpdir(), "agentguard-integrity-"))));
+  beforeEach(async () => (dir = await mkdtemp(join(tmpdir(), "signhold-integrity-"))));
   afterEach(async () => rm(dir, { recursive: true, force: true }));
 
   it("InMemoryAuditStore seals sequentially even under concurrent writes", async () => {

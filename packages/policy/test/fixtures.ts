@@ -1,4 +1,4 @@
-import type { AgentContext, PolicyRule, PolicySet, SimulationResult, TransactionIntent } from "@agentguard/core";
+import type { AgentContext, PolicyRule, PolicySet, SimulationResult, TransactionIntent } from "@signhold/core";
 
 export const AGENT = "0xAgent000000000000000000000000000000000001";
 export const ROUTER = "0xRouter00000000000000000000000000000000002";

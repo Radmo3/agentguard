@@ -1,15 +1,15 @@
 /**
  * Wiring of the behavior integration (`ServerOptions.behavior`, duck-typed; the real
- * `@agentguard/behavior` package is separately licensed and not part of this repo, so
- * an in-test stub with the same structural shape is used) and @agentguard/reputation
+ * `@signhold/behavior` package is separately licensed and not part of this repo, so
+ * an in-test stub with the same structural shape is used) and @signhold/reputation
  * into the request pipeline (simulate -> reputation.prefetch -> behavior.store.get ->
  * evaluate -> audit -> behavior.persist), and the fail-closed invariants of that wiring.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import type { Decision } from "@agentguard/core";
-import { PolicyEngine, conservativeDefaultPolicy } from "@agentguard/policy";
-import { ReputationService, StaticListProvider, createReputationRule, type ReputationProvider } from "@agentguard/reputation";
+import type { Decision } from "@signhold/core";
+import { PolicyEngine, conservativeDefaultPolicy } from "@signhold/policy";
+import { ReputationService, StaticListProvider, createReputationRule, type ReputationProvider } from "@signhold/reputation";
 import { InMemoryAuditStore } from "../src/audit.js";
 import { BEHAVIOR_RULE, REPUTATION_RULE, withCustomRules, buildReputationUrl } from "../src/bootstrap.js";
 import { createServer } from "../src/server.js";
@@ -69,7 +69,7 @@ describe("behavior + reputation wiring", () => {
     const p = withCustomRules(conservativeDefaultPolicy, [BEHAVIOR_RULE, REPUTATION_RULE, BEHAVIOR_RULE]);
     expect(p.rules.filter((r) => r.kind === "custom").map((r) => r.id)).toEqual(["behavior", "reputation"]);
     expect(conservativeDefaultPolicy.rules.some((r) => r.kind === "custom")).toBe(false); // original untouched
-    const { loadPolicy } = await import("@agentguard/policy");
+    const { loadPolicy } = await import("@signhold/policy");
     expect(() => loadPolicy(p)).not.toThrow();
   });
 

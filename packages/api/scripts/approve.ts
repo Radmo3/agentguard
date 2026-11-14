@@ -2,11 +2,11 @@
 /**
  * Approver device CLI: show a human the escalated transaction, obtain their explicit
  * confirmation, sign the server-bound challenge with the approver private key, and
- * (optionally) submit it to the AgentGuard API.
+ * (optionally) submit it to the Signhold API.
  *
  *   # fetch the sealed record from the server with the DEVICE's own API key, show it, sign, submit
  *   npx tsx packages/api/scripts/approve.ts --key ./ops-phone.key --key-id ops-phone \
- *       --audit-id <auditId> --url https://agentguard --api-key <approver api key> [--reason "..."]
+ *       --audit-id <auditId> --url https://signhold --api-key <approver api key> [--reason "..."]
  *
  *   # offline: the sealed record was obtained out of band (GET /v1/audit/:auditId); print the signed body
  *   npx tsx packages/api/scripts/approve.ts --key ./ops-phone.key --key-id ops-phone \
@@ -33,7 +33,7 @@ import {
   toDecimal,
   type ApprovalSubmission,
   type AuditRecord,
-} from "@agentguard/core";
+} from "@signhold/core";
 import { loadEd25519PrivateKey } from "../src/integrity.js";
 import { reviveAuditRecord } from "../src/serialization.js";
 

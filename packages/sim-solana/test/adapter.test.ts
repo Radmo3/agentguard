@@ -8,7 +8,7 @@ import {
   createApproveInstruction, createCloseAccountInstruction, createSetAuthorityInstruction,
   createTransferCheckedInstruction, createTransferInstruction, AuthorityType,
 } from "@solana/spl-token";
-import { U64_MAX } from "@agentguard/core";
+import { U64_MAX } from "@signhold/core";
 import { SolanaAdapter, type ConnectionLike } from "../src/index.js";
 
 const agent = Keypair.generate();

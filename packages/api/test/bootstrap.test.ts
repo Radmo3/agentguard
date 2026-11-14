@@ -11,7 +11,7 @@ const STUB_BEHAVIOR_MODULE = pathToFileURL(join(import.meta.dirname, "behavior-s
 
 describe("bootstrap (behavior + reputation layers)", () => {
   it("degrades gracefully with a warning when the behavior package is not installed", async () => {
-    // This repository never ships @agentguard/behavior; the layer must simply be off.
+    // This repository never ships @signhold/behavior; the layer must simply be off.
     const warnings: string[] = [];
     const r = await bootstrap({ evmRpcUrl: "http://127.0.0.1:1", log: { warn: (m) => warnings.push(m), info() {} } });
     expect(r.behavior).toBeUndefined();
@@ -27,7 +27,7 @@ describe("bootstrap (behavior + reputation layers)", () => {
   });
 
   it("registers both custom rules and extends the default policy when a behavior module is installed", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "agentguard-boot-"));
+    const dir = mkdtempSync(join(tmpdir(), "signhold-boot-"));
     const deny = join(dir, "deny.json");
     writeFileSync(deny, JSON.stringify({ version: 1, entries: [{ chain: "evm", address: "0xbad0000000000000000000000000000000000bad" }] }));
     const r = await bootstrap({

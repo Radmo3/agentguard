@@ -1,7 +1,7 @@
-# AgentGuard — Architecture
+# Signhold — Architecture
 
 Transaction guardrail layer for AI agents that hold wallets. An agent proposes a
-transaction; AgentGuard simulates it, evaluates it against policy, and returns
+transaction; Signhold simulates it, evaluates it against policy, and returns
 `allow | block | escalate` with a human-readable explanation and an audit record.
 
 ## Monorepo layout (npm workspaces, TypeScript, ESM, Node 22)
@@ -20,7 +20,7 @@ packages/
 examples/      end-to-end demo scripts
 
 (external)
-  @agentguard/behavior   per-agent behavioural baseline, deterministic anomaly scoring,
+  @signhold/behavior   per-agent behavioural baseline, deterministic anomaly scoring,
                          JSONL/in-memory profile stores with hash-chained event log,
                          `behavior` custom rule. Separately licensed; NOT in this repo.
 ```
@@ -29,7 +29,7 @@ examples/      end-to-end demo scripts
 their rule as a plain function with the engine's `CustomRuleFn` shape; `api`
 injects them duck-typed (`ServerOptions.behavior`, `ServerOptions.reputation`) and
 `bootstrap` loads them dynamically, so `api` has no compile-time dependency on
-either. The behavior package is loaded by name (`@agentguard/behavior`, overridable
+either. The behavior package is loaded by name (`@signhold/behavior`, overridable
 via `BootstrapEnv.behaviorModule`) and must export
 `createBehaviorIntegration({ profilePath }) => { store, rule, persist }`
 (`BehaviorModuleLike` in `packages/api/src/types.ts`); when it is not installed
@@ -85,7 +85,7 @@ appended to its verdict history.
 
 ## Shared contracts (packages/core/src/types.ts)
 
-All packages import types from `@agentguard/core`. Do NOT redefine them.
+All packages import types from `@signhold/core`. Do NOT redefine them.
 Key types: `Chain`, `TransactionIntent`, `SimulationResult`, `AssetDelta`,
 `ApprovalChange`, `PolicyRule`, `PolicySet`, `Decision`, `Verdict`,
 `ChainAdapter`, `AgentContext`, `AuditRecord` (`type`: `check` |

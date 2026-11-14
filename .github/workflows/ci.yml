@@ -25,7 +25,7 @@ jobs:
       - name: Production start refuses to run without API keys
         run: |
           set +e
-          NODE_ENV=production AGENTGUARD_EVM_RPC_URL=http://127.0.0.1:1 node packages/api/dist/main.js
+          NODE_ENV=production SIGNHOLD_EVM_RPC_URL=http://127.0.0.1:1 node packages/api/dist/main.js
           code=$?
           set -e
           if [ "$code" -eq 0 ]; then echo "server started in production without keys"; exit 1; fi

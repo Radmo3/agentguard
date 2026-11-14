@@ -42,7 +42,7 @@ describe("ApiKeyring", () => {
     expect(() => new ApiKeyring([{ id: "bad id!", key: "x" }])).toThrow(/invalid api key id/);
   });
 
-  it("parses AGENTGUARD_API_KEYS with optional id prefixes", () => {
+  it("parses SIGNHOLD_API_KEYS with optional id prefixes", () => {
     const keys = parseApiKeysEnv(" ops:abc , def ,, trading:ghi:with:colons ");
     expect(keys.map((k) => k.id)).toEqual(["ops", expect.stringMatching(/^key-/), "trading"]);
     expect(keys[2].key).toBe("ghi:with:colons");
@@ -124,7 +124,7 @@ describe("HMAC request signing", () => {
       path: overrides.path ?? "/v1/check",
       body,
     });
-    return { "x-api-key": KEY, "content-type": "application/json", "x-agentguard-signature": sig, "x-agentguard-timestamp": ts, "x-agentguard-nonce": nonce };
+    return { "x-api-key": KEY, "content-type": "application/json", "x-signhold-signature": sig, "x-signhold-timestamp": ts, "x-signhold-nonce": nonce };
   }
 
   it("accepts a valid signature and marks the audit record as signed", async () => {
@@ -157,7 +157,7 @@ describe("HMAC request signing", () => {
     expect(wrongKey.json().error).toBe("invalid_signature");
 
     const partial = { ...signedHeaders(body) } as Record<string, string>;
-    delete partial["x-agentguard-nonce"];
+    delete partial["x-signhold-nonce"];
     expect((await app.inject({ method: "POST", url: "/v1/check", payload: body, headers: partial })).statusCode).toBe(401);
   });
 

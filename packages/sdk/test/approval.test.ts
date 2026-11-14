@@ -6,8 +6,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ADVISORY_MODE_WARNING,
-  AgentGuardClient,
-  AgentGuardProtocolError,
+  SignholdClient,
+  SignholdProtocolError,
   ApprovalDeniedError,
   ApprovalTimeoutError,
   GuardEscalatedError,
@@ -34,20 +34,20 @@ function signer() {
 describe("client.check surfaces the approval challenge", () => {
   it("passes `approval` through and rejects a malformed one", async () => {
     const { fetch } = mockFetch(escalateResponse());
-    const c = new AgentGuardClient({ baseUrl: "http://gw", fetch });
+    const c = new SignholdClient({ baseUrl: "http://gw", fetch });
     const res = await c.check({ id: "i", chain: "evm", from: "0x1" }, { agentId: "a" });
     expect(res.approval).toEqual({ challenge: CHALLENGE, expiresAt: EXPIRES });
 
     const bad = mockFetch(jsonResponse(200, { decision: decisionJson("escalate"), auditId: AUDIT, approval: { challenge: "zz", expiresAt: EXPIRES } }));
-    const c2 = new AgentGuardClient({ baseUrl: "http://gw", fetch: bad.fetch });
-    await expect(c2.check({ id: "i", chain: "evm", from: "0x1" }, { agentId: "a" })).rejects.toBeInstanceOf(AgentGuardProtocolError);
+    const c2 = new SignholdClient({ baseUrl: "http://gw", fetch: bad.fetch });
+    await expect(c2.check({ id: "i", chain: "evm", from: "0x1" }, { agentId: "a" })).rejects.toBeInstanceOf(SignholdProtocolError);
   });
 });
 
 describe("client.waitForApproval", () => {
   it("polls GET /v1/approvals/:auditId and resolves on a literal `approved`", async () => {
     const { fetch, calls } = mockFetch(status("pending"), status("pending"), approvedStatus());
-    const c = new AgentGuardClient({ baseUrl: "http://gw", fetch });
+    const c = new SignholdClient({ baseUrl: "http://gw", fetch });
     const polls: string[] = [];
     const granted = await c.waitForApproval(AUDIT, { intervalMs: 50, timeoutMs: 5_000, onPoll: (s) => void polls.push(s.status) });
     expect(granted).toEqual({ auditId: AUDIT, status: "approved", approvedBy: "ops-phone", approvalId: "appr-1", approvedAt: "2026-01-01T00:01:00.000Z" });
@@ -61,7 +61,7 @@ describe("client.waitForApproval", () => {
 
   it("times out while pending", async () => {
     const { fetch } = mockFetch(status("pending"));
-    const c = new AgentGuardClient({ baseUrl: "http://gw", fetch });
+    const c = new SignholdClient({ baseUrl: "http://gw", fetch });
     const err = await c.waitForApproval(AUDIT, { intervalMs: 50, timeoutMs: 200 }).catch((e) => e);
     expect(err).toBeInstanceOf(ApprovalTimeoutError);
     expect(err.lastStatus).toBe("pending");
@@ -70,7 +70,7 @@ describe("client.waitForApproval", () => {
   for (const terminal of ["expired", "rejected", "unknown"]) {
     it(`throws ApprovalDeniedError on '${terminal}' without waiting`, async () => {
       const { fetch, calls } = mockFetch(status(terminal));
-      const c = new AgentGuardClient({ baseUrl: "http://gw", fetch });
+      const c = new SignholdClient({ baseUrl: "http://gw", fetch });
       const err = await c.waitForApproval(AUDIT, { intervalMs: 50, timeoutMs: 5_000 }).catch((e) => e);
       expect(err).toBeInstanceOf(ApprovalDeniedError);
       expect(err.status).toBe(terminal);
@@ -88,14 +88,14 @@ describe("client.waitForApproval", () => {
       null,
     ]) {
       const { fetch } = mockFetch(() => new Response(typeof body === "string" ? body : JSON.stringify(body), { status: 200 }));
-      const c = new AgentGuardClient({ baseUrl: "http://gw", fetch, retries: 0 });
-      await expect(c.waitForApproval(AUDIT, { intervalMs: 50, timeoutMs: 1_000 })).rejects.toBeInstanceOf(AgentGuardProtocolError);
+      const c = new SignholdClient({ baseUrl: "http://gw", fetch, retries: 0 });
+      await expect(c.waitForApproval(AUDIT, { intervalMs: 50, timeoutMs: 1_000 })).rejects.toBeInstanceOf(SignholdProtocolError);
     }
   });
 
   it("a 4xx while polling is not an approval", async () => {
     const { fetch } = mockFetch(jsonResponse(403, { error: "forbidden" }));
-    const c = new AgentGuardClient({ baseUrl: "http://gw", fetch, retries: 0 });
+    const c = new SignholdClient({ baseUrl: "http://gw", fetch, retries: 0 });
     await expect(c.waitForApproval(AUDIT, { intervalMs: 50, timeoutMs: 1_000 })).rejects.toThrow();
   });
 });
@@ -107,7 +107,7 @@ describe("guard() in server mode (default)", () => {
   it("throws GuardEscalatedError carrying auditId + challenge, never calls the signer", async () => {
     const { fetch } = mockFetch(escalateResponse());
     const s = signer();
-    const g = guard(s, new AgentGuardClient({ baseUrl: "http://gw", fetch }), { toIntent, context: { agentId: "a" } });
+    const g = guard(s, new SignholdClient({ baseUrl: "http://gw", fetch }), { toIntent, context: { agentId: "a" } });
     const err = await g.sendTransaction(tx).catch((e) => e);
     expect(err).toBeInstanceOf(GuardEscalatedError);
     expect(err.auditId).toBe(AUDIT);
@@ -118,7 +118,7 @@ describe("guard() in server mode (default)", () => {
 
   it("refuses a local onEscalate callback at construction time (it cannot approve anything)", () => {
     const { fetch } = mockFetch(escalateResponse());
-    const client = new AgentGuardClient({ baseUrl: "http://gw", fetch });
+    const client = new SignholdClient({ baseUrl: "http://gw", fetch });
     const onEscalate = vi.fn(async () => true);
     expect(() => guard(signer(), client, { toIntent, context: { agentId: "a" }, onEscalate })).toThrow(/onEscalate is not allowed/);
     expect(() => guard(signer(), client, { toIntent, context: { agentId: "a" }, approval: "server", onEscalate })).toThrow(/onEscalate is not allowed/);
@@ -129,7 +129,7 @@ describe("guard() in server mode (default)", () => {
     const { fetch } = mockFetch(escalateResponse());
     const s = signer();
     const opts = { toIntent, context: { agentId: "a" } } as Parameters<typeof guard>[2];
-    const g = guard(s, new AgentGuardClient({ baseUrl: "http://gw", fetch }), opts);
+    const g = guard(s, new SignholdClient({ baseUrl: "http://gw", fetch }), opts);
     // A compromised agent mutating the options object after the fact gains nothing.
     const injected = vi.fn(async () => true);
     (opts as { onEscalate?: unknown }).onEscalate = injected;
@@ -143,7 +143,7 @@ describe("guard() in server mode (default)", () => {
     const { fetch } = mockFetch(escalateResponse());
     const s = signer();
     const pending = vi.fn(async () => true as unknown as void);
-    const g = guard(s, new AgentGuardClient({ baseUrl: "http://gw", fetch }), { toIntent, context: { agentId: "a" }, onEscalationPending: pending });
+    const g = guard(s, new SignholdClient({ baseUrl: "http://gw", fetch }), { toIntent, context: { agentId: "a" }, onEscalationPending: pending });
     await expect(g.sendTransaction(tx)).rejects.toBeInstanceOf(GuardEscalatedError);
     expect(pending).toHaveBeenCalledOnce();
     expect(pending.mock.calls[0][0]).toMatchObject({ auditId: AUDIT, approval: { challenge: CHALLENGE } });
@@ -153,7 +153,7 @@ describe("guard() in server mode (default)", () => {
   it("with waitForApproval: signs only after the server reports `approved`", async () => {
     const { fetch, calls } = mockFetch(escalateResponse(), status("pending"), approvedStatus());
     const s = signer();
-    const g = guard(s, new AgentGuardClient({ baseUrl: "http://gw", fetch }), {
+    const g = guard(s, new SignholdClient({ baseUrl: "http://gw", fetch }), {
       toIntent, context: { agentId: "a" }, waitForApproval: { intervalMs: 50, timeoutMs: 5_000 },
     });
     expect(await g.sendTransaction(tx)).toBe("hash");
@@ -170,7 +170,7 @@ describe("guard() in server mode (default)", () => {
     ]) {
       const { fetch } = mockFetch(...responses);
       const s = signer();
-      const g = guard(s, new AgentGuardClient({ baseUrl: "http://gw", fetch }), {
+      const g = guard(s, new SignholdClient({ baseUrl: "http://gw", fetch }), {
         toIntent, context: { agentId: "a" }, waitForApproval: { intervalMs: 50, timeoutMs: 150 },
       });
       await expect(g.sendTransaction(tx)).rejects.toThrow();
@@ -181,7 +181,7 @@ describe("guard() in server mode (default)", () => {
   it("with waitForApproval but no challenge from the server (no approver keys registered) it throws immediately", async () => {
     const { fetch, calls } = mockFetch(jsonResponse(200, { decision: decisionJson("escalate"), auditId: AUDIT }));
     const s = signer();
-    const g = guard(s, new AgentGuardClient({ baseUrl: "http://gw", fetch }), { toIntent, context: { agentId: "a" }, waitForApproval: true });
+    const g = guard(s, new SignholdClient({ baseUrl: "http://gw", fetch }), { toIntent, context: { agentId: "a" }, waitForApproval: true });
     const err = await g.sendTransaction(tx).catch((e) => e);
     expect(err).toBeInstanceOf(GuardEscalatedError);
     expect(err.message).toContain("no approver keys");
@@ -196,7 +196,7 @@ describe("guard() advisory mode (approval: \"callback\")", () => {
 
   it("warns loudly exactly once per process", () => {
     const { fetch } = mockFetch(escalateResponse());
-    const client = new AgentGuardClient({ baseUrl: "http://gw", fetch });
+    const client = new SignholdClient({ baseUrl: "http://gw", fetch });
     const warn = vi.fn();
     guard(signer(), client, { toIntent, context: { agentId: "a" }, approval: "callback", onEscalate: () => true, warn });
     guard(signer(), client, { toIntent, context: { agentId: "a" }, approval: "callback", onEscalate: () => true, warn });
@@ -207,7 +207,7 @@ describe("guard() advisory mode (approval: \"callback\")", () => {
 
   it("requires an onEscalate function and rejects waitForApproval", () => {
     const { fetch } = mockFetch(escalateResponse());
-    const client = new AgentGuardClient({ baseUrl: "http://gw", fetch });
+    const client = new SignholdClient({ baseUrl: "http://gw", fetch });
     expect(() => guard(signer(), client, { toIntent, context: { agentId: "a" }, approval: "callback", warn: () => {} })).toThrow(/requires an onEscalate/);
     expect(() => guard(signer(), client, { toIntent, context: { agentId: "a" }, approval: "callback", onEscalate: () => true, waitForApproval: true, warn: () => {} })).toThrow(/waitForApproval/);
   });

@@ -1,4 +1,4 @@
-# Contributing to AgentGuard
+# Contributing to Signhold
 
 Thanks for helping make agent wallets safer. This document covers how to build and test the project, how to send changes, and where security issues go.
 
@@ -12,7 +12,7 @@ Requires Node 22+ and npm 10+.
 
 ```bash
 git clone <your fork>
-cd agentguard
+cd signhold
 npm ci
 npm run build        # tsc for every workspace, in dependency order
 npm run typecheck
@@ -32,7 +32,7 @@ npm audit --omit=dev --audit-level=high || node scripts/audit-exceptions.mjs
 
 See [ARCHITECTURE.md](ARCHITECTURE.md). The short version: `packages/core` holds the shared types (never redefine them), `packages/policy` the rule engine, `packages/sim-evm` / `packages/sim-solana` the chain adapters, `packages/reputation` the counterparty reputation layer, `packages/api` the HTTP service, `packages/sdk` the client. `examples/` has the demo.
 
-The behavioral anomaly layer (`@agentguard/behavior`) is a separately licensed package that is **not** in this repository. It plugs in through `ServerOptions.behavior` and the `createBehaviorIntegration` factory contract in `packages/api/src/types.ts`; the API tests exercise that contract with an in-test stub (`packages/api/test/behavior-stub.ts`).
+The behavioral anomaly layer (`@signhold/behavior`) is a separately licensed package that is **not** in this repository. It plugs in through `ServerOptions.behavior` and the `createBehaviorIntegration` factory contract in `packages/api/src/types.ts`; the API tests exercise that contract with an in-test stub (`packages/api/test/behavior-stub.ts`).
 
 ## Ground rules for changes
 

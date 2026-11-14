@@ -1,4 +1,4 @@
-import type { Chain } from "@agentguard/core";
+import type { Chain } from "@signhold/core";
 import { MAX_TAGS, MAX_TAG_LENGTH, type ReputationSignal, type ReputationVerdict } from "./types.js";
 
 /** Addresses are case-insensitive on EVM, case-sensitive (base58) on Solana. */

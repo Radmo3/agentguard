@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AgentGuardClient, AgentGuardClientError, GuardEscalatedError, guard } from "../src/index.js";
+import { SignholdClient, SignholdClientError, GuardEscalatedError, guard } from "../src/index.js";
 import { decisionJson, jsonResponse, mockFetch } from "./helpers.js";
 
 interface EvmTx { to: string; value: bigint }
@@ -15,8 +15,8 @@ describe("guard() fails closed", () => {
   it("does not call the signer when the API is unreachable", async () => {
     const { fetch } = mockFetch(new Error("ECONNREFUSED"));
     const s = signer();
-    const g = guard(s, new AgentGuardClient({ baseUrl: "http://gw", fetch, retries: 0 }), { toIntent, context: { agentId: "a" } });
-    await expect(g.sendTransaction(tx)).rejects.toBeInstanceOf(AgentGuardClientError);
+    const g = guard(s, new SignholdClient({ baseUrl: "http://gw", fetch, retries: 0 }), { toIntent, context: { agentId: "a" } });
+    await expect(g.sendTransaction(tx)).rejects.toBeInstanceOf(SignholdClientError);
     expect(s.sendTransaction).not.toHaveBeenCalled();
   });
 
@@ -24,8 +24,8 @@ describe("guard() fails closed", () => {
     for (const status of [500, 429, 401, 400]) {
       const { fetch } = mockFetch(jsonResponse(status, { error: "x" }));
       const s = signer();
-      const g = guard(s, new AgentGuardClient({ baseUrl: "http://gw", fetch, retries: 0 }), { toIntent, context: { agentId: "a" } });
-      await expect(g.sendTransaction(tx)).rejects.toBeInstanceOf(AgentGuardClientError);
+      const g = guard(s, new SignholdClient({ baseUrl: "http://gw", fetch, retries: 0 }), { toIntent, context: { agentId: "a" } });
+      await expect(g.sendTransaction(tx)).rejects.toBeInstanceOf(SignholdClientError);
       expect(s.sendTransaction).not.toHaveBeenCalled();
     }
   });
@@ -40,21 +40,21 @@ describe("guard() fails closed", () => {
     ]) {
       const { fetch } = mockFetch(() => new Response(typeof body === "string" ? body : JSON.stringify(body), { status: 200 }));
       const s = signer();
-      const g = guard(s, new AgentGuardClient({ baseUrl: "http://gw", fetch, retries: 0 }), { toIntent, context: { agentId: "a" } });
-      await expect(g.sendTransaction(tx)).rejects.toBeInstanceOf(AgentGuardClientError);
+      const g = guard(s, new SignholdClient({ baseUrl: "http://gw", fetch, retries: 0 }), { toIntent, context: { agentId: "a" } });
+      await expect(g.sendTransaction(tx)).rejects.toBeInstanceOf(SignholdClientError);
       expect(s.sendTransaction).not.toHaveBeenCalled();
     }
   });
 
   it("does not call the signer when onEscalate / onDecision / toIntent / context throw", async () => {
     const { fetch } = mockFetch(jsonResponse(200, { decision: decisionJson("escalate"), auditId: "a" }));
-    const client = new AgentGuardClient({ baseUrl: "http://gw", fetch });
+    const client = new SignholdClient({ baseUrl: "http://gw", fetch });
     const s1 = signer();
     await expect(guard(s1, client, { toIntent, context: { agentId: "a" }, approval: "callback", warn: () => {}, onEscalate: () => { throw new Error("ui down"); } }).sendTransaction(tx)).rejects.toThrow("ui down");
     expect(s1.sendTransaction).not.toHaveBeenCalled();
 
     const { fetch: f2 } = mockFetch(jsonResponse(200, { decision: decisionJson("allow"), auditId: "a" }));
-    const c2 = new AgentGuardClient({ baseUrl: "http://gw", fetch: f2 });
+    const c2 = new SignholdClient({ baseUrl: "http://gw", fetch: f2 });
     const s2 = signer();
     await expect(guard(s2, c2, { toIntent, context: { agentId: "a" }, onDecision: () => { throw new Error("metrics"); } }).sendTransaction(tx)).rejects.toThrow("metrics");
     expect(s2.sendTransaction).not.toHaveBeenCalled();
@@ -72,7 +72,7 @@ describe("guard() fails closed", () => {
     for (const ret of [1, "true", {}, [], null, undefined, false]) {
       const { fetch } = mockFetch(jsonResponse(200, { decision: decisionJson("escalate"), auditId: "a" }));
       const s = signer();
-      const g = guard(s, new AgentGuardClient({ baseUrl: "http://gw", fetch }), { toIntent, context: { agentId: "a" }, approval: "callback", warn: () => {}, onEscalate: () => ret as never });
+      const g = guard(s, new SignholdClient({ baseUrl: "http://gw", fetch }), { toIntent, context: { agentId: "a" }, approval: "callback", warn: () => {}, onEscalate: () => ret as never });
       await expect(g.sendTransaction(tx)).rejects.toBeInstanceOf(GuardEscalatedError);
       expect(s.sendTransaction).not.toHaveBeenCalled();
     }

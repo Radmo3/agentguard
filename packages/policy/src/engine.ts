@@ -1,5 +1,5 @@
-import type { Decision, RuleFinding, SimulationResult, Verdict } from "@agentguard/core";
-import { isUnlimitedApproval, nowIso } from "@agentguard/core";
+import type { Decision, RuleFinding, SimulationResult, Verdict } from "@signhold/core";
+import { isUnlimitedApproval, nowIso } from "@signhold/core";
 import { builtinRules, type CustomRuleFn, type CustomRuleRegistry, type EvaluateInput } from "./rules.js";
 
 export interface PolicyEngineOptions {

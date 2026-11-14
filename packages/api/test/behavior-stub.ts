@@ -1,5 +1,5 @@
 /**
- * Minimal stand-in for a behavioral anomaly package. The real `@agentguard/behavior`
+ * Minimal stand-in for a behavioral anomaly package. The real `@signhold/behavior`
  * is a separately licensed package that is not part of this repository; the API only
  * ever sees the structural interfaces in `src/types.ts` (`BehaviorIntegration`,
  * `BehaviorStoreLike`, `BehaviorModuleLike`), so the tests exercise the wiring and the
@@ -14,7 +14,7 @@
  *   - novel counterparty                  -> escalate (anomalyScore 60)
  *   - otherwise                           -> null
  */
-import type { AgentContext, Decision, PolicyRule, PolicySet, RuleFinding, SimulationResult, TransactionIntent } from "@agentguard/core";
+import type { AgentContext, Decision, PolicyRule, PolicySet, RuleFinding, SimulationResult, TransactionIntent } from "@signhold/core";
 import type { BehaviorIntegration, BehaviorIntegrationOptions, BehaviorStoreLike } from "../src/types.js";
 
 export interface StubProfile {

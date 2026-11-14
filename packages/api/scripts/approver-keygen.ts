@@ -4,13 +4,13 @@
  *
  *   npx tsx packages/api/scripts/approver-keygen.ts --id ops-phone [--out ./ops-phone.key]
  *
- * Prints the AGENTGUARD_APPROVER_KEYS entry for the server (public half only) and
+ * Prints the SIGNHOLD_APPROVER_KEYS entry for the server (public half only) and
  * writes the private key (PKCS#8 PEM, mode 0600) to --out, or to stdout when --out
  * is omitted.
  *
  * THE PRIVATE KEY IS THE HUMAN'S CREDENTIAL. Run this ON THE APPROVER DEVICE and keep
  * the key there: a phone keystore, an HSM, a hardware key, or at minimum an operator
- * laptop that the agent cannot reach. Never copy it to the agent host, the AgentGuard
+ * laptop that the agent cannot reach. Never copy it to the agent host, the Signhold
  * host, CI, or a shared secrets store the agent can read. If the agent can read this
  * key, approval is no longer inalienable: the agent can approve itself.
  */
@@ -43,8 +43,8 @@ function main(): void {
   const rawPub = (publicKey.export({ type: "spki", format: "der" }) as Buffer).subarray(-32);
   const privatePem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 
-  console.log("# Register the PUBLIC key on the AgentGuard server (append to existing entries with a comma):");
-  console.log(`AGENTGUARD_APPROVER_KEYS=${id}:${rawPub.toString("base64")}`);
+  console.log("# Register the PUBLIC key on the Signhold server (append to existing entries with a comma):");
+  console.log(`SIGNHOLD_APPROVER_KEYS=${id}:${rawPub.toString("base64")}`);
   console.log();
   if (out) {
     writeFileSync(out, privatePem, { mode: 0o600, flag: "wx" });
@@ -55,7 +55,7 @@ function main(): void {
   }
   console.log();
   console.log(`# Approve an escalation from this device:`);
-  console.log(`#   npx tsx packages/api/scripts/approve.ts --key ${out ?? "<private-key-file>"} --key-id ${id} --audit-id <auditId> --url https://agentguard --api-key <approver api key>`);
+  console.log(`#   npx tsx packages/api/scripts/approve.ts --key ${out ?? "<private-key-file>"} --key-id ${id} --audit-id <auditId> --url https://signhold --api-key <approver api key>`);
 }
 
 main();

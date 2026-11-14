@@ -1,15 +1,15 @@
-import type { AgentContext, ApprovalStatus, ApprovalStatusResponse, AuditRecord, CheckRequest, CheckResponse, TransactionIntent } from "@agentguard/core";
-import { AgentGuardHttpError, AgentGuardNetworkError, AgentGuardProtocolError, AgentGuardTimeoutError, ApprovalDeniedError, ApprovalTimeoutError } from "./errors.js";
+import type { AgentContext, ApprovalStatus, ApprovalStatusResponse, AuditRecord, CheckRequest, CheckResponse, TransactionIntent } from "@signhold/core";
+import { SignholdHttpError, SignholdNetworkError, SignholdProtocolError, SignholdTimeoutError, ApprovalDeniedError, ApprovalTimeoutError } from "./errors.js";
 import { reviveCheckResponse, reviveContext, reviveDecision, reviveIntent, serializeRequest } from "./serialization.js";
 import { signRequest, type RequestSigner } from "./signing.js";
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
-export interface AgentGuardClientOptions {
+export interface SignholdClientOptions {
   baseUrl: string;
   apiKey?: string;
   /**
-   * Enable HMAC request signing (`x-agentguard-signature`). `true` signs with
+   * Enable HMAC request signing (`x-signhold-signature`). `true` signs with
    * `apiKey`; a string uses a dedicated signing secret configured server-side
    * for this key. Requires `apiKey`.
    */
@@ -61,7 +61,7 @@ export interface ApprovalGranted {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-export class AgentGuardClient {
+export class SignholdClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: FetchLike;
   private readonly timeoutMs: number;
@@ -69,15 +69,15 @@ export class AgentGuardClient {
   private readonly backoffMs: number;
   private readonly signingSecret: string | undefined;
 
-  constructor(private readonly opts: AgentGuardClientOptions) {
+  constructor(private readonly opts: SignholdClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
-    if (!/^https?:\/\//i.test(this.baseUrl)) throw new AgentGuardNetworkError("baseUrl must be an http(s) URL");
+    if (!/^https?:\/\//i.test(this.baseUrl)) throw new SignholdNetworkError("baseUrl must be an http(s) URL");
     if (opts.signRequests) {
-      if (!opts.apiKey) throw new AgentGuardNetworkError("signRequests requires apiKey");
+      if (!opts.apiKey) throw new SignholdNetworkError("signRequests requires apiKey");
       this.signingSecret = typeof opts.signRequests === "string" ? opts.signRequests : opts.apiKey;
     }
     const f = opts.fetch ?? (globalThis.fetch as FetchLike | undefined);
-    if (!f) throw new AgentGuardNetworkError("no fetch implementation available; pass `fetch` in options");
+    if (!f) throw new SignholdNetworkError("no fetch implementation available; pass `fetch` in options");
     this.fetchImpl = f;
     this.timeoutMs = opts.timeoutMs ?? 10_000;
     this.retries = opts.retries ?? 2;
@@ -125,7 +125,7 @@ export class AgentGuardClient {
    * Poll `GET /v1/approvals/:auditId` until the server reports `approved`.
    * Resolves only on a literal `approved`; `expired` / `rejected` / `unknown` throw
    * `ApprovalDeniedError`, the deadline throws `ApprovalTimeoutError`, and any
-   * malformed status throws `AgentGuardProtocolError`. Nothing in this method can
+   * malformed status throws `SignholdProtocolError`. Nothing in this method can
    * produce an approval: it only reads state the approver device created.
    */
   async waitForApproval(auditId: string, opts: WaitForApprovalOptions = {}): Promise<ApprovalGranted> {
@@ -134,13 +134,13 @@ export class AgentGuardClient {
     const deadline = Date.now() + timeoutMs;
     let last: ApprovalStatus | undefined;
     for (;;) {
-      if (opts.signal?.aborted) throw new AgentGuardNetworkError("waitForApproval aborted", opts.signal.reason);
+      if (opts.signal?.aborted) throw new SignholdNetworkError("waitForApproval aborted", opts.signal.reason);
       const st = await this.getApprovalStatus(auditId, { signal: opts.signal });
       opts.onPoll?.(st);
       last = st.status;
       if (st.status === "approved") {
         if (typeof st.approvedBy !== "string" || !st.approvedBy || typeof st.approvalId !== "string" || !st.approvalId) {
-          throw new AgentGuardProtocolError("malformed approval status: approved without approvedBy/approvalId");
+          throw new SignholdProtocolError("malformed approval status: approved without approvedBy/approvalId");
         }
         return { auditId, status: "approved", approvedBy: st.approvedBy, approvalId: st.approvalId, approvedAt: st.approvedAt };
       }
@@ -169,21 +169,21 @@ export class AgentGuardClient {
     let lastErr: unknown;
     for (let attempt = 0; attempt <= this.retries; attempt++) {
       if (attempt > 0) await sleep(this.backoffMs * 2 ** (attempt - 1));
-      if (signal?.aborted) throw new AgentGuardNetworkError("request aborted", signal.reason);
+      if (signal?.aborted) throw new SignholdNetworkError("request aborted", signal.reason);
 
       // Fresh headers + timestamp + nonce per attempt so retries are never rejected as replays.
       const headers: Record<string, string> = { ...baseHeaders };
       if (this.signingSecret) {
         const sig = await (this.opts.signer ?? signRequest)({ secret: this.signingSecret, method, path, body: payload ?? "" });
-        headers["x-agentguard-signature"] = sig.signature;
-        headers["x-agentguard-timestamp"] = sig.timestamp;
-        headers["x-agentguard-nonce"] = sig.nonce;
+        headers["x-signhold-signature"] = sig.signature;
+        headers["x-signhold-timestamp"] = sig.timestamp;
+        headers["x-signhold-nonce"] = sig.nonce;
       }
 
       const controller = new AbortController();
       const onAbort = () => controller.abort(signal?.reason);
       signal?.addEventListener("abort", onAbort, { once: true });
-      const timer = setTimeout(() => controller.abort(new AgentGuardTimeoutError(perAttemptTimeout)), perAttemptTimeout);
+      const timer = setTimeout(() => controller.abort(new SignholdTimeoutError(perAttemptTimeout)), perAttemptTimeout);
 
       let res: Response;
       try {
@@ -191,10 +191,10 @@ export class AgentGuardClient {
       } catch (err) {
         clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
-        if (signal?.aborted) throw new AgentGuardNetworkError("request aborted", signal.reason);
-        lastErr = controller.signal.reason instanceof AgentGuardTimeoutError
+        if (signal?.aborted) throw new SignholdNetworkError("request aborted", signal.reason);
+        lastErr = controller.signal.reason instanceof SignholdTimeoutError
           ? controller.signal.reason
-          : new AgentGuardNetworkError(`AgentGuard request failed: ${(err as Error)?.message ?? String(err)}`, err);
+          : new SignholdNetworkError(`Signhold request failed: ${(err as Error)?.message ?? String(err)}`, err);
         continue; // retry network/timeouts
       }
       clearTimeout(timer);
@@ -213,7 +213,7 @@ export class AgentGuardClient {
       if (res.ok) return parsed;
 
       const message = (parsed as { message?: string } | undefined)?.message;
-      const httpErr = new AgentGuardHttpError(res.status, parsed, message ? `AgentGuard API ${res.status}: ${message}` : undefined);
+      const httpErr = new SignholdHttpError(res.status, parsed, message ? `Signhold API ${res.status}: ${message}` : undefined);
       if (res.status >= 500) {
         lastErr = httpErr;
         continue; // retry 5xx
@@ -231,9 +231,9 @@ const APPROVAL_STATUSES = new Set<ApprovalStatus>(["pending", "approved", "expir
 function assertApprovalStatus(raw: unknown, auditId: string): ApprovalStatusResponse {
   const r = raw as Partial<ApprovalStatusResponse> | null;
   if (!r || typeof r !== "object" || typeof r.status !== "string" || !APPROVAL_STATUSES.has(r.status)) {
-    throw new AgentGuardProtocolError("malformed approval status response");
+    throw new SignholdProtocolError("malformed approval status response");
   }
-  if (r.auditId !== auditId) throw new AgentGuardProtocolError("approval status response is for a different audit id");
+  if (r.auditId !== auditId) throw new SignholdProtocolError("approval status response is for a different audit id");
   return r as ApprovalStatusResponse;
 }
 
@@ -244,17 +244,17 @@ function assertApprovalStatus(raw: unknown, auditId: string): ApprovalStatusResp
 function assertCheckResponse(raw: unknown): Record<string, unknown> {
   const r = raw as { decision?: { verdict?: unknown }; auditId?: unknown } | null;
   if (!r || typeof r !== "object" || !r.decision || typeof r.decision !== "object") {
-    throw new AgentGuardProtocolError("malformed check response: missing decision");
+    throw new SignholdProtocolError("malformed check response: missing decision");
   }
   if (typeof r.decision.verdict !== "string" || !VERDICTS.has(r.decision.verdict)) {
-    throw new AgentGuardProtocolError("malformed check response: unknown verdict");
+    throw new SignholdProtocolError("malformed check response: unknown verdict");
   }
-  if (typeof r.auditId !== "string" || !r.auditId) throw new AgentGuardProtocolError("malformed check response: missing auditId");
+  if (typeof r.auditId !== "string" || !r.auditId) throw new SignholdProtocolError("malformed check response: missing auditId");
   const a = (r as { approval?: unknown }).approval;
   if (a !== undefined) {
     const ap = a as { challenge?: unknown; expiresAt?: unknown } | null;
     if (!ap || typeof ap !== "object" || typeof ap.challenge !== "string" || !/^[0-9a-f]{64}$/.test(ap.challenge) || typeof ap.expiresAt !== "string") {
-      throw new AgentGuardProtocolError("malformed check response: bad approval challenge");
+      throw new SignholdProtocolError("malformed check response: bad approval challenge");
     }
   }
   return r as Record<string, unknown>;

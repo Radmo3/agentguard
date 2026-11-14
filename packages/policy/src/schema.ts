@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { PolicySet } from "@agentguard/core";
-import { PolicyError } from "@agentguard/core";
+import type { PolicySet } from "@signhold/core";
+import { PolicyError } from "@signhold/core";
 
 export const ruleKindSchema = z.enum([
   "max_tx_usd",

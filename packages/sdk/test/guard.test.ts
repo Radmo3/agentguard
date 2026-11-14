@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AgentGuardClient, GuardBlockedError, GuardEscalatedError, guard } from "../src/index.js";
+import { SignholdClient, GuardBlockedError, GuardEscalatedError, guard } from "../src/index.js";
 import { decisionJson, jsonResponse, mockFetch } from "./helpers.js";
 
 interface EvmTx { to: string; value: bigint; data?: `0x${string}` }
@@ -15,7 +15,7 @@ function makeSigner() {
 
 function clientWith(verdict: "allow" | "block" | "escalate") {
   const { fetch, calls } = mockFetch(jsonResponse(200, { decision: decisionJson(verdict), auditId: `aud-${verdict}` }));
-  return { client: new AgentGuardClient({ baseUrl: "http://gw", fetch }), calls };
+  return { client: new SignholdClient({ baseUrl: "http://gw", fetch }), calls };
 }
 
 const toIntent = (tx: EvmTx) => ({ chain: "evm" as const, chainId: 1, from: "0xagent", to: tx.to, value: tx.value, data: tx.data });
@@ -31,7 +31,7 @@ describe("guard()", () => {
     expect(await g.signTransaction(tx)).toBe("signed:0xdest");
     expect(g.address).toBe("0xagent");
     expect(g.getChainId()).toBe(1);
-    expect(g.__agentguardInner).toBe(signer);
+    expect(g.__signholdInner).toBe(signer);
     expect(signer.sendTransaction).toHaveBeenCalledWith(tx);
     expect(calls).toHaveLength(2);
     const body = JSON.parse(calls[0].init.body as string);

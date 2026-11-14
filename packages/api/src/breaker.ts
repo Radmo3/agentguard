@@ -1,4 +1,4 @@
-import type { ChainAdapter, SimulationResult, TransactionIntent } from "@agentguard/core";
+import type { ChainAdapter, SimulationResult, TransactionIntent } from "@signhold/core";
 
 export interface CircuitBreakerOptions {
   /** Consecutive failures that open the circuit. Default 5. */

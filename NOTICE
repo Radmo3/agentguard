@@ -1,7 +1,7 @@
-AgentGuard
-Copyright 2026 AgentGuard contributors
+Signhold
+Copyright 2026 Signhold contributors
 
-This product includes software developed by the AgentGuard contributors.
+This product includes software developed by the Signhold contributors.
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not
 use this software except in compliance with the License. You may obtain a copy
@@ -9,7 +9,7 @@ of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
 
-The behavioral anomaly layer, published separately as `@agentguard/behavior`,
+The behavioral anomaly layer, published separately as `@signhold/behavior`,
 is NOT covered by this license. It is proprietary software distributed under
 its own terms and is not included in this repository.
 

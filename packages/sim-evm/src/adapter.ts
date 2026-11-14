@@ -5,7 +5,7 @@ import {
 import {
   isUnlimitedApproval, toDecimal, UINT256_MAX,
   type ApprovalChange, type AssetDelta, type ChainAdapter, type SimulationResult, type TransactionIntent,
-} from "@agentguard/core";
+} from "@signhold/core";
 import { ERC20_ABI } from "./abis.js";
 import type { PublicClientLike, TraceCall, TraceLog, TraceResult } from "./client.js";
 import { decodeCalldata, parseRevertReason, type DecodedCall } from "./decode.js";

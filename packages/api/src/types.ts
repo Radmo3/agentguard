@@ -8,7 +8,7 @@ import type {
   PolicySet,
   SimulationResult,
   TransactionIntent,
-} from "@agentguard/core";
+} from "@signhold/core";
 import type { KeyObject } from "node:crypto";
 import type { ApproverKeyConfig } from "./approvals.js";
 import type { ApiKeyConfig } from "./auth.js";
@@ -16,7 +16,7 @@ import type { CircuitBreakerOptions } from "./breaker.js";
 
 /**
  * Input to the policy engine, mirroring ARCHITECTURE.md's request flow.
- * Structurally identical to `@agentguard/policy`'s `EvaluateInput` (policy is required:
+ * Structurally identical to `@signhold/policy`'s `EvaluateInput` (policy is required:
  * the server always resolves a policy before calling the engine).
  */
 export interface EvaluateInput {
@@ -27,7 +27,7 @@ export interface EvaluateInput {
 }
 
 /**
- * Minimal structural interface for `@agentguard/policy`'s `PolicyEngine`.
+ * Minimal structural interface for `@signhold/policy`'s `PolicyEngine`.
  * Defined locally so the API does not import the policy package directly.
  */
 export interface PolicyEngineLike {
@@ -69,7 +69,7 @@ export interface RequestSigningOptions {
 
 /**
  * Structural interface for a behavioral profile store (the optional, separately
- * licensed `@agentguard/behavior` package ships one; any object with this shape works).
+ * licensed `@signhold/behavior` package ships one; any object with this shape works).
  * Only `get` is needed by the server (to warm the synchronous `peek` the policy rule
  * reads); the integration's `persist` receives the whole object.
  */
@@ -92,7 +92,7 @@ export interface BehaviorIntegration {
 }
 
 /**
- * Synchronous custom rule, structurally identical to `@agentguard/policy`'s
+ * Synchronous custom rule, structurally identical to `@signhold/policy`'s
  * `CustomRuleFn`. Declared loosely here because the API only forwards it to the engine.
  */
 export type CustomRuleLike = (input: unknown) => unknown;
@@ -111,7 +111,7 @@ export interface BehaviorIntegrationOptions {
   profilePath?: string;
 }
 
-/** Structural subset of `@agentguard/reputation`'s `ReputationService`. */
+/** Structural subset of `@signhold/reputation`'s `ReputationService`. */
 export interface ReputationServiceLike {
   /** Warm the cache for every address the reputation rule will consult. Awaited before `engine.evaluate`. */
   prefetch(intent: TransactionIntent, simulation?: SimulationResult): Promise<unknown>;
@@ -136,7 +136,7 @@ export interface ServerOptions {
   apiKeys?: ReadonlyArray<string | ApiKeyConfig>;
   /** Deployment environment; defaults to process.env.NODE_ENV. "production" enforces hardening. */
   env?: string;
-  /** HMAC request signing (`x-agentguard-signature`). */
+  /** HMAC request signing (`x-signhold-signature`). */
   signing?: RequestSigningOptions;
   /**
    * Rate limiting, per API key (falls back to client IP when unauthenticated).

@@ -1,5 +1,5 @@
-import type { AgentContext, CheckResponse, Decision, TransactionIntent } from "@agentguard/core";
-import type { AgentGuardClient, CheckOptions, WaitForApprovalOptions } from "./client.js";
+import type { AgentContext, CheckResponse, Decision, TransactionIntent } from "@signhold/core";
+import type { SignholdClient, CheckOptions, WaitForApprovalOptions } from "./client.js";
 import { GuardBlockedError, GuardEscalatedError } from "./errors.js";
 
 /** Minimal duck-typed signer. Any object exposing one or both of these methods can be wrapped. */
@@ -86,13 +86,13 @@ export interface GuardOptions {
 
 export type Guarded<S extends SignerLike> = S & {
   /** The unwrapped signer. */
-  readonly __agentguardInner: S;
+  readonly __signholdInner: S;
 };
 
 const GUARDED_METHODS = ["signTransaction", "sendTransaction"] as const;
 
 export const ADVISORY_MODE_WARNING =
-  "[agentguard] guard() is running with approval: \"callback\" (advisory mode). onEscalate executes inside the agent process, " +
+  "[signhold] guard() is running with approval: \"callback\" (advisory mode). onEscalate executes inside the agent process, " +
   "so the agent can approve its own escalated transactions. This is NOT inalienable human-in-the-loop (I-HITL). " +
   "Use approval: \"server\" with registered approver keys for any signer that controls real funds.";
 
@@ -105,14 +105,14 @@ export function __resetAdvisoryWarning(): void {
 
 /**
  * Wrap a signer so that every `signTransaction` / `sendTransaction` call is checked
- * against AgentGuard first. Returns a Proxy; all other properties pass through untouched.
+ * against Signhold first. Returns a Proxy; all other properties pass through untouched.
  *
  * On `escalate` the default (`approval: "server"`) never consults code in this
  * process: it either throws `GuardEscalatedError` with the challenge for a human,
  * or (with `waitForApproval`) polls the server until a registered approver's
  * signature has been verified there.
  */
-export function guard<S extends SignerLike>(signer: S, client: AgentGuardClient, opts: GuardOptions): Guarded<S> {
+export function guard<S extends SignerLike>(signer: S, client: SignholdClient, opts: GuardOptions): Guarded<S> {
   const genId = opts.generateId ?? (() => globalThis.crypto.randomUUID());
   const mode: ApprovalMode = opts.approval ?? "server";
   if (mode !== "server" && mode !== "callback") throw new TypeError(`guard(): unknown approval mode '${String(mode)}'`);
@@ -178,7 +178,7 @@ export function guard<S extends SignerLike>(signer: S, client: AgentGuardClient,
 
   return new Proxy(signer, {
     get(target, prop, receiver) {
-      if (prop === "__agentguardInner") return target;
+      if (prop === "__signholdInner") return target;
       const value = Reflect.get(target, prop, receiver);
       if ((GUARDED_METHODS as readonly PropertyKey[]).includes(prop) && typeof value === "function") {
         const method = prop as (typeof GUARDED_METHODS)[number];

@@ -1,4 +1,4 @@
-import type { PolicyRule } from "@agentguard/core";
+import type { PolicyRule } from "@signhold/core";
 import { describe, expect, it } from "vitest";
 import { ReputationService, StaticListProvider, createReputationRule, type ReputationProvider } from "../src/index.js";
 import { OTHER, ROUTER, SHADY, failingProvider, intent, mockProvider, sig, simulation } from "./helpers.js";

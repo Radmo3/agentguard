@@ -13,7 +13,7 @@ import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import type { KeyObject } from "node:crypto";
-import type { AuditRecord } from "@agentguard/core";
+import type { AuditRecord } from "@signhold/core";
 import { summarizeApprovals, type ApprovalProvenance } from "../src/approvals.js";
 import { keyIdOf, loadEd25519PublicKey, verifyChain, type VerifyResult } from "../src/integrity.js";
 import { reviveAuditRecord } from "../src/serialization.js";

@@ -7,8 +7,8 @@ import type {
   SimulationResult,
   TransactionIntent,
   Verdict,
-} from "@agentguard/core";
-import { toDecimal, isUnlimitedApproval } from "@agentguard/core";
+} from "@signhold/core";
+import { toDecimal, isUnlimitedApproval } from "@signhold/core";
 
 /** Everything a rule may look at. */
 export interface EvaluateInput {

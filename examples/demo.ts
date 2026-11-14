@@ -1,5 +1,5 @@
 /**
- * AgentGuard end-to-end demo.
+ * Signhold end-to-end demo.
  *
  * Starts the HTTP API in-process with the real policy engine, the conservative
  * default policy extended with the reputation rule, and EVM / Solana adapters
@@ -17,7 +17,7 @@
  *       attempt is refused (403), the approver device signs the challenge, the server
  *       verifies it and the status becomes `approved`
  *
- * The behavioral anomaly layer (`@agentguard/behavior`, separately licensed) is not
+ * The behavioral anomaly layer (`@signhold/behavior`, separately licensed) is not
  * part of this repository; when installed it plugs into `createServer` through
  * `ServerOptions.behavior` and adds the "learned baseline then drain" detection.
  *
@@ -30,18 +30,18 @@ import {
   type AccountInfo, type SimulatedTransactionResponse,
 } from "@solana/web3.js";
 import { ACCOUNT_SIZE, AccountLayout, MINT_SIZE, MintLayout, TOKEN_PROGRAM_ID, createTransferCheckedInstruction } from "@solana/spl-token";
-import { UINT256_MAX, type AgentContext, type TransactionIntent, type Verdict } from "@agentguard/core";
-import { PolicyEngine, conservativeDefaultPolicy } from "@agentguard/policy";
-import { EvmAdapter, ERC20_ABI, type PublicClientLike } from "@agentguard/sim-evm";
-import { SolanaAdapter, type ConnectionLike } from "@agentguard/sim-solana";
-import { ReputationService, StaticListProvider, createReputationRule, type ReputationProvider } from "@agentguard/reputation";
-import { REPUTATION_RULE, createServer, InMemoryAuditStore, withCustomRules } from "@agentguard/api";
-import { AgentGuardClient } from "@agentguard/sdk";
+import { UINT256_MAX, type AgentContext, type TransactionIntent, type Verdict } from "@signhold/core";
+import { PolicyEngine, conservativeDefaultPolicy } from "@signhold/policy";
+import { EvmAdapter, ERC20_ABI, type PublicClientLike } from "@signhold/sim-evm";
+import { SolanaAdapter, type ConnectionLike } from "@signhold/sim-solana";
+import { ReputationService, StaticListProvider, createReputationRule, type ReputationProvider } from "@signhold/reputation";
+import { REPUTATION_RULE, createServer, InMemoryAuditStore, withCustomRules } from "@signhold/api";
+import { SignholdClient } from "@signhold/sdk";
 
 // ---------------------------------------------------------------------------
 // Approver device fixture. In production this is a phone / HSM / hardware key the
 // agent cannot reach; here it is a key pair that only `trustedDevice.sign` touches.
-// Only the PUBLIC half is handed to the server (AGENTGUARD_APPROVER_KEYS).
+// Only the PUBLIC half is handed to the server (SIGNHOLD_APPROVER_KEYS).
 // ---------------------------------------------------------------------------
 function makeTrustedDevice(keyId: string) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -203,7 +203,7 @@ async function main() {
   });
   const baseUrl = await app.listen({ port: 0, host: "127.0.0.1" });
 
-  const client = new AgentGuardClient({ baseUrl, apiKey: "demo-key" });
+  const client = new SignholdClient({ baseUrl, apiKey: "demo-key" });
   const context: AgentContext = { agentId: "demo-agent", spentUsdInWindow: 0, windowSeconds: 3600 };
 
   const cases: Array<{ name: string; expect: Verdict; intent: TransactionIntent; context?: AgentContext; before?: () => void }> = [

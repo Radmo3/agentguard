@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { TransactionIntent } from "@agentguard/core";
-import { AgentGuardClient, AgentGuardHttpError, AgentGuardNetworkError, AgentGuardTimeoutError } from "../src/index.js";
+import type { TransactionIntent } from "@signhold/core";
+import { SignholdClient, SignholdHttpError, SignholdNetworkError, SignholdTimeoutError } from "../src/index.js";
 import { decisionJson, jsonResponse, mockFetch } from "./helpers.js";
 
 const intent: TransactionIntent = { id: "intent-1", chain: "evm", from: "0xa", to: "0xb", value: 42n, data: "0x01" };
 const ctx = { agentId: "agent" };
 
-describe("AgentGuardClient.check", () => {
+describe("SignholdClient.check", () => {
   it("serialises bigints as strings, sends api key, revives bigints in the response", async () => {
     const { fetch, calls } = mockFetch(jsonResponse(200, { decision: decisionJson("allow"), auditId: "aud-1" }));
-    const client = new AgentGuardClient({ baseUrl: "http://gw/", apiKey: "k", fetch, policyId: "default" });
+    const client = new SignholdClient({ baseUrl: "http://gw/", apiKey: "k", fetch, policyId: "default" });
     const res = await client.check(intent, ctx);
 
     expect(calls[0].url).toBe("http://gw/v1/check");
@@ -33,7 +33,7 @@ describe("AgentGuardClient.check", () => {
       jsonResponse(500, { error: "y" }),
       jsonResponse(200, { decision: decisionJson("allow"), auditId: "aud-2" }),
     );
-    const client = new AgentGuardClient({ baseUrl: "http://gw", fetch, retries: 2, retryBackoffMs: 1 });
+    const client = new SignholdClient({ baseUrl: "http://gw", fetch, retries: 2, retryBackoffMs: 1 });
     const res = await client.check(intent, ctx);
     expect(res.auditId).toBe("aud-2");
     expect(calls).toHaveLength(3);
@@ -41,9 +41,9 @@ describe("AgentGuardClient.check", () => {
 
   it("gives up after retries with the last HTTP error", async () => {
     const { fetch, calls } = mockFetch(jsonResponse(502, { message: "bad gateway" }));
-    const client = new AgentGuardClient({ baseUrl: "http://gw", fetch, retries: 1, retryBackoffMs: 1 });
+    const client = new SignholdClient({ baseUrl: "http://gw", fetch, retries: 1, retryBackoffMs: 1 });
     const err = await client.check(intent, ctx).catch((e) => e);
-    expect(err).toBeInstanceOf(AgentGuardHttpError);
+    expect(err).toBeInstanceOf(SignholdHttpError);
     expect(err.status).toBe(502);
     expect(err.code).toBe("server_error");
     expect(err.message).toContain("bad gateway");
@@ -52,9 +52,9 @@ describe("AgentGuardClient.check", () => {
 
   it("does not retry 4xx and surfaces typed error", async () => {
     const { fetch, calls } = mockFetch(jsonResponse(401, { error: "unauthorized", message: "missing key" }));
-    const client = new AgentGuardClient({ baseUrl: "http://gw", fetch, retryBackoffMs: 1 });
+    const client = new SignholdClient({ baseUrl: "http://gw", fetch, retryBackoffMs: 1 });
     const err = await client.check(intent, ctx).catch((e) => e);
-    expect(err).toBeInstanceOf(AgentGuardHttpError);
+    expect(err).toBeInstanceOf(SignholdHttpError);
     expect(err.code).toBe("unauthorized");
     expect(err.body.message).toBe("missing key");
     expect(calls).toHaveLength(1);
@@ -62,20 +62,20 @@ describe("AgentGuardClient.check", () => {
 
   it("retries network errors", async () => {
     const { fetch, calls } = mockFetch(new Error("ECONNREFUSED"), jsonResponse(200, { decision: decisionJson("allow"), auditId: "a" }));
-    const client = new AgentGuardClient({ baseUrl: "http://gw", fetch, retryBackoffMs: 1 });
+    const client = new SignholdClient({ baseUrl: "http://gw", fetch, retryBackoffMs: 1 });
     await client.check(intent, ctx);
     expect(calls).toHaveLength(2);
   });
 
-  it("times out and reports AgentGuardTimeoutError", async () => {
+  it("times out and reports SignholdTimeoutError", async () => {
     const fetch = async (_url: string, init: RequestInit) =>
       new Promise<Response>((_resolve, reject) => {
         init.signal?.addEventListener("abort", () => reject(init.signal!.reason));
       });
-    const client = new AgentGuardClient({ baseUrl: "http://gw", fetch, timeoutMs: 10, retries: 0 });
+    const client = new SignholdClient({ baseUrl: "http://gw", fetch, timeoutMs: 10, retries: 0 });
     const err = await client.check(intent, ctx).catch((e) => e);
-    expect(err).toBeInstanceOf(AgentGuardTimeoutError);
-    expect(err).toBeInstanceOf(AgentGuardNetworkError);
+    expect(err).toBeInstanceOf(SignholdTimeoutError);
+    expect(err).toBeInstanceOf(SignholdNetworkError);
     expect(err.code).toBe("timeout");
   });
 
@@ -88,7 +88,7 @@ describe("AgentGuardClient.check", () => {
       context: { agentId: "agent", now: "2026-01-01T00:00:00.000Z" },
     };
     const { fetch, calls } = mockFetch(jsonResponse(200, record), jsonResponse(200, { items: [record], nextCursor: "1" }));
-    const client = new AgentGuardClient({ baseUrl: "http://gw", fetch });
+    const client = new SignholdClient({ baseUrl: "http://gw", fetch });
     const one = await client.getAudit("aud-9");
     expect(one.intent.value).toBe(42n);
     expect(one.context.now).toBeInstanceOf(Date);

@@ -1,6 +1,6 @@
 /**
- * HMAC request signing, compatible with the AgentGuard API's
- * `x-agentguard-signature` verification. Uses WebCrypto only so it runs in
+ * HMAC request signing, compatible with the Signhold API's
+ * `x-signhold-signature` verification. Uses WebCrypto only so it runs in
  * Node 22, Deno, Bun and browsers.
  *
  * Base string:  "v1\n<timestamp-ms>\n<nonce>\n<METHOD>\n<path?query>\n<sha256hex(body)>"

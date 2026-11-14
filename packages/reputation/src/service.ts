@@ -1,4 +1,4 @@
-import type { Chain, SimulationResult, TransactionIntent } from "@agentguard/core";
+import type { Chain, SimulationResult, TransactionIntent } from "@signhold/core";
 import { LruCache } from "./cache.js";
 import {
   ReputationProviderError,

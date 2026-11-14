@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PolicyError } from "@agentguard/core";
+import { PolicyError } from "@signhold/core";
 import {
   PolicyEngine,
   aggregateVerdict,

@@ -34,20 +34,20 @@ async function main(): Promise<void> {
   const port = envInt("PORT", 8787);
   const host = env.HOST ?? "0.0.0.0";
 
-  const apiKeys = parseApiKeysEnv(env.AGENTGUARD_API_KEYS);
+  const apiKeys = parseApiKeysEnv(env.SIGNHOLD_API_KEYS);
   if (apiKeys.length === 0 && isProd) {
-    throw new Error("AGENTGUARD_API_KEYS must be set when NODE_ENV=production");
+    throw new Error("SIGNHOLD_API_KEYS must be set when NODE_ENV=production");
   }
 
   // ---- Audit signing key ----
   let signer: AuditSigner | undefined;
-  if (env.AGENTGUARD_AUDIT_SIGNING_KEY) {
-    signer = createEd25519Signer(loadEd25519PrivateKey(env.AGENTGUARD_AUDIT_SIGNING_KEY));
+  if (env.SIGNHOLD_AUDIT_SIGNING_KEY) {
+    signer = createEd25519Signer(loadEd25519PrivateKey(env.SIGNHOLD_AUDIT_SIGNING_KEY));
   } else if (isProd) {
-    throw new Error("AGENTGUARD_AUDIT_SIGNING_KEY must be set when NODE_ENV=production (Ed25519 seed or PKCS#8 PEM)");
-  } else if (envBool("AGENTGUARD_AUDIT_SIGNING", true)) {
+    throw new Error("SIGNHOLD_AUDIT_SIGNING_KEY must be set when NODE_ENV=production (Ed25519 seed or PKCS#8 PEM)");
+  } else if (envBool("SIGNHOLD_AUDIT_SIGNING", true)) {
     signer = generateEphemeralSigner();
-    console.warn(`[agentguard] AGENTGUARD_AUDIT_SIGNING_KEY not set: generated an EPHEMERAL Ed25519 audit signing key (keyId ${signer.keyId}). Records signed with it cannot be verified after restart.`);
+    console.warn(`[signhold] SIGNHOLD_AUDIT_SIGNING_KEY not set: generated an EPHEMERAL Ed25519 audit signing key (keyId ${signer.keyId}). Records signed with it cannot be verified after restart.`);
   }
 
   const auditPublicKeys = new Map<string, import("node:crypto").KeyObject>();
@@ -55,34 +55,34 @@ async function main(): Promise<void> {
     const pk = loadEd25519PublicKey(signer.publicKeyPem);
     auditPublicKeys.set(keyIdOf(pk), pk);
   }
-  for (const extra of envList("AGENTGUARD_AUDIT_PUBLIC_KEYS") ?? []) {
+  for (const extra of envList("SIGNHOLD_AUDIT_PUBLIC_KEYS") ?? []) {
     const pk = loadEd25519PublicKey(extra);
     auditPublicKeys.set(keyIdOf(pk), pk);
   }
 
-  const audit: AuditStore = env.AGENTGUARD_AUDIT_FILE
-    ? new JsonlAuditStore(env.AGENTGUARD_AUDIT_FILE, { signer })
+  const audit: AuditStore = env.SIGNHOLD_AUDIT_FILE
+    ? new JsonlAuditStore(env.SIGNHOLD_AUDIT_FILE, { signer })
     : new InMemoryAuditStore({ signer });
 
   const wiring = await bootstrap({
-    policyPath: env.AGENTGUARD_POLICY_FILE,
-    evmRpcUrl: env.AGENTGUARD_EVM_RPC_URL,
-    solanaRpcUrl: env.AGENTGUARD_SOLANA_RPC_URL,
-    knownEvmContracts: envList("AGENTGUARD_KNOWN_EVM_CONTRACTS"),
-    knownSolanaPrograms: envList("AGENTGUARD_KNOWN_SOLANA_PROGRAMS"),
-    profilePath: envBool("AGENTGUARD_BEHAVIOR", true) ? env.AGENTGUARD_PROFILE_FILE : false,
-    reputation: envBool("AGENTGUARD_REPUTATION", true),
-    reputationAllowlistFiles: envList("AGENTGUARD_REPUTATION_ALLOWLIST"),
-    reputationDenylistFiles: envList("AGENTGUARD_REPUTATION_DENYLIST"),
-    reputationHttpUrl: env.AGENTGUARD_REPUTATION_HTTP_URL,
+    policyPath: env.SIGNHOLD_POLICY_FILE,
+    evmRpcUrl: env.SIGNHOLD_EVM_RPC_URL,
+    solanaRpcUrl: env.SIGNHOLD_SOLANA_RPC_URL,
+    knownEvmContracts: envList("SIGNHOLD_KNOWN_EVM_CONTRACTS"),
+    knownSolanaPrograms: envList("SIGNHOLD_KNOWN_SOLANA_PROGRAMS"),
+    profilePath: envBool("SIGNHOLD_BEHAVIOR", true) ? env.SIGNHOLD_PROFILE_FILE : false,
+    reputation: envBool("SIGNHOLD_REPUTATION", true),
+    reputationAllowlistFiles: envList("SIGNHOLD_REPUTATION_ALLOWLIST"),
+    reputationDenylistFiles: envList("SIGNHOLD_REPUTATION_DENYLIST"),
+    reputationHttpUrl: env.SIGNHOLD_REPUTATION_HTTP_URL,
   });
 
   // ---- Human approver keys (I-HITL): public halves only; private keys live on the approver devices ----
-  const approvers = parseApproverKeysEnv(env.AGENTGUARD_APPROVER_KEYS);
+  const approvers = parseApproverKeysEnv(env.SIGNHOLD_APPROVER_KEYS);
 
-  const rateMax = envInt("AGENTGUARD_RATE_LIMIT_MAX", 120);
-  const corsOrigins = envList("AGENTGUARD_CORS_ORIGINS");
-  const trustProxyRaw = env.AGENTGUARD_TRUST_PROXY;
+  const rateMax = envInt("SIGNHOLD_RATE_LIMIT_MAX", 120);
+  const corsOrigins = envList("SIGNHOLD_CORS_ORIGINS");
+  const trustProxyRaw = env.SIGNHOLD_TRUST_PROXY;
   const trustProxy: boolean | string | number =
     trustProxyRaw === undefined || trustProxyRaw === "" ? false
     : trustProxyRaw === "true" ? true
@@ -96,23 +96,23 @@ async function main(): Promise<void> {
     apiKeys,
     env: nodeEnv,
     signing: {
-      required: envBool("AGENTGUARD_REQUIRE_SIGNED_REQUESTS", false),
-      windowMs: envInt("AGENTGUARD_SIGNING_WINDOW_MS", 5 * 60_000),
+      required: envBool("SIGNHOLD_REQUIRE_SIGNED_REQUESTS", false),
+      windowMs: envInt("SIGNHOLD_SIGNING_WINDOW_MS", 5 * 60_000),
     },
-    rateLimit: rateMax > 0 ? { max: rateMax, timeWindowMs: envInt("AGENTGUARD_RATE_LIMIT_WINDOW_MS", 60_000) } : false,
-    bodyLimit: envInt("AGENTGUARD_BODY_LIMIT_BYTES", 64 * 1024),
+    rateLimit: rateMax > 0 ? { max: rateMax, timeWindowMs: envInt("SIGNHOLD_RATE_LIMIT_WINDOW_MS", 60_000) } : false,
+    bodyLimit: envInt("SIGNHOLD_BODY_LIMIT_BYTES", 64 * 1024),
     trustProxy,
     cors: corsOrigins && corsOrigins.length > 0 ? { origins: corsOrigins } : false,
     circuitBreaker: {
-      failureThreshold: envInt("AGENTGUARD_ADAPTER_FAILURE_THRESHOLD", 5),
-      resetTimeoutMs: envInt("AGENTGUARD_ADAPTER_RESET_MS", 30_000),
-      callTimeoutMs: envInt("AGENTGUARD_ADAPTER_TIMEOUT_MS", 15_000),
+      failureThreshold: envInt("SIGNHOLD_ADAPTER_FAILURE_THRESHOLD", 5),
+      resetTimeoutMs: envInt("SIGNHOLD_ADAPTER_RESET_MS", 30_000),
+      callTimeoutMs: envInt("SIGNHOLD_ADAPTER_TIMEOUT_MS", 15_000),
     },
     auditPublicKeys,
     approvers,
-    approvals: { ttlMs: envInt("AGENTGUARD_APPROVAL_TTL_MS", 15 * 60_000), clockSkewMs: envInt("AGENTGUARD_APPROVAL_CLOCK_SKEW_MS", 60_000) },
+    approvals: { ttlMs: envInt("SIGNHOLD_APPROVAL_TTL_MS", 15 * 60_000), clockSkewMs: envInt("SIGNHOLD_APPROVAL_CLOCK_SKEW_MS", 60_000) },
     logger: { level: env.LOG_LEVEL ?? "info" },
-    shutdownGraceMs: envInt("AGENTGUARD_SHUTDOWN_GRACE_MS", 10_000),
+    shutdownGraceMs: envInt("SIGNHOLD_SHUTDOWN_GRACE_MS", 10_000),
   });
 
   if (signer) app.log.info({ keyId: signer.keyId }, "audit records are Ed25519-signed");
@@ -125,7 +125,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     app.log.info({ signal }, "shutting down; draining in-flight requests");
-    const hardStop = setTimeout(() => process.exit(1), envInt("AGENTGUARD_SHUTDOWN_GRACE_MS", 10_000) + 5_000);
+    const hardStop = setTimeout(() => process.exit(1), envInt("SIGNHOLD_SHUTDOWN_GRACE_MS", 10_000) + 5_000);
     hardStop.unref();
     await app.close();
     process.exit(0);

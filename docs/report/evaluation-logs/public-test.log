@@ -3,27 +3,27 @@
 > npm run test --workspaces --if-present
 
 
-> @agentguard/api@0.1.0 test
+> @signhold/api@0.1.0 test
 > vitest run --passWithNoTests
 
 
- RUN  v5.1.0 /home/claude/agentguard/packages/api
+ RUN  v5.1.0 /home/claude/signhold/packages/api
 
 
  Test Files  11 passed (11)
       Tests  180 passed (180)
-   Start at  00:24:00
-   Duration  8.36s (tests 72%, import 26%, transform 2%, worker 1%)
+   Start at  01:43:08
+   Duration  11.10s (tests 67%, import 22%, transform 11%, worker 1%)
 
-    Isolate  11 workers spawned · ~101ms startup each (spawn + environment, per file)
-             at least ~1.01s faster with isolate: false — reuses workers across files instead of one per file
+    Isolate  11 workers spawned · ~112ms startup each (spawn + environment, per file)
+             at least ~1.12s faster with isolate: false — reuses workers across files instead of one per file
 
 
-> @agentguard/core@0.1.0 test
+> @signhold/core@0.1.0 test
 > vitest run --passWithNoTests
 
 
- RUN  v5.1.0 /home/claude/agentguard/packages/core
+ RUN  v5.1.0 /home/claude/signhold/packages/core
 
 No test files found, exiting with code 0
 
@@ -31,73 +31,73 @@ include: **/*.{test,spec}.?(c|m)[jt]s?(x)
 exclude:  **/node_modules/**, **/.git/**
 
 
-> @agentguard/policy@0.1.0 test
+> @signhold/policy@0.1.0 test
 > vitest run --passWithNoTests
 
 
- RUN  v5.1.0 /home/claude/agentguard/packages/policy
+ RUN  v5.1.0 /home/claude/signhold/packages/policy
 
 
  Test Files  2 passed (2)
       Tests  37 passed (37)
-   Start at  00:24:09
-   Duration  426ms (tests 42%, import 37%, transform 16%, worker 5%)
+   Start at  01:43:20
+   Duration  600ms (transform 59%, import 20%, tests 18%, worker 3%)
 
 
-> @agentguard/reputation@0.1.0 test
+> @signhold/reputation@0.1.0 test
 > vitest run --passWithNoTests
 
 
- RUN  v5.1.0 /home/claude/agentguard/packages/reputation
+ RUN  v5.1.0 /home/claude/signhold/packages/reputation
 
 
  Test Files  5 passed (5)
       Tests  74 passed (74)
-   Start at  00:24:10
-   Duration  808ms (tests 48%, import 35%, transform 10%, worker 8%)
+   Start at  01:43:21
+   Duration  1.04s (transform 49%, tests 26%, import 21%, worker 4%)
 
-    Isolate  5 workers spawned · ~99ms startup each (spawn + environment, per file)
-             at least ~398ms faster with isolate: false — reuses workers across files instead of one per file
+    Isolate  5 workers spawned · ~102ms startup each (spawn + environment, per file)
+             at least ~409ms faster with isolate: false — reuses workers across files instead of one per file
 
 
-> @agentguard/sdk@0.1.0 test
+> @signhold/sdk@0.1.0 test
 > vitest run --passWithNoTests
 
 
- RUN  v5.1.0 /home/claude/agentguard/packages/sdk
+ RUN  v5.1.0 /home/claude/signhold/packages/sdk
 
 
  Test Files  5 passed (5)
       Tests  41 passed (41)
-   Start at  00:24:11
-   Duration  1.42s (tests 83%, import 12%, transform 3%, worker 2%)
+   Start at  01:43:22
+   Duration  1.65s (tests 66%, transform 23%, import 10%, worker 2%)
 
-    Isolate  5 workers spawned · ~102ms startup each (spawn + environment, per file)
-             at least ~408ms faster with isolate: false — reuses workers across files instead of one per file
+    Isolate  5 workers spawned · ~99ms startup each (spawn + environment, per file)
+             at least ~394ms faster with isolate: false — reuses workers across files instead of one per file
 
 
-> @agentguard/sim-evm@0.1.0 test
+> @signhold/sim-evm@0.1.0 test
 > vitest run --passWithNoTests
 
 
- RUN  v5.1.0 /home/claude/agentguard/packages/sim-evm
+ RUN  v5.1.0 /home/claude/signhold/packages/sim-evm
 
 
  Test Files  1 passed (1)
       Tests  12 passed (12)
-   Start at  00:24:13
-   Duration  387ms (import 78%, transform 13%, tests 8%, worker 1%)
+   Start at  01:43:24
+   Duration  543ms (import 52%, transform 41%, tests 6%, worker 1%)
 
 
-> @agentguard/sim-solana@0.1.0 test
+> @signhold/sim-solana@0.1.0 test
 > vitest run --passWithNoTests
 
 
- RUN  v5.1.0 /home/claude/agentguard/packages/sim-solana
+ RUN  v5.1.0 /home/claude/signhold/packages/sim-solana
 
 
  Test Files  1 passed (1)
       Tests  9 passed (9)
-   Start at  00:24:13
-   Duration  538ms (import 88%, tests 6%, transform 5%, worker 1%)
+   Start at  01:43:25
+   Duration  732ms (import 62%, transform 32%, tests 6%, worker 1%)
 

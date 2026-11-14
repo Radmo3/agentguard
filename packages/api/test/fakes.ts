@@ -1,4 +1,4 @@
-import type { ChainAdapter, Decision, PolicySet, SimulationResult, TransactionIntent } from "@agentguard/core";
+import type { ChainAdapter, Decision, PolicySet, SimulationResult, TransactionIntent } from "@signhold/core";
 import type { EvaluateInput, PolicyEngineLike } from "../src/types.js";
 
 export const testPolicy: PolicySet = { id: "test-policy", version: 3, rules: [] };

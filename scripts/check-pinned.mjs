@@ -11,7 +11,7 @@ for (const dir of dirs) {
   const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
   for (const field of ["dependencies", "optionalDependencies"]) {
     for (const [name, range] of Object.entries(pkg[field] ?? {})) {
-      if (name.startsWith("@agentguard/")) continue; // workspace packages
+      if (name.startsWith("@signhold/")) continue; // workspace packages
       if (!exact.test(range)) { console.error(`${pkg.name}: ${name}@${range} is not pinned`); bad++; }
     }
   }

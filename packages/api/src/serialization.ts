@@ -9,8 +9,8 @@ import type {
   Decision,
   SimulationResult,
   TransactionIntent,
-} from "@agentguard/core";
-import { bigintReplacer } from "@agentguard/core";
+} from "@signhold/core";
+import { bigintReplacer } from "@signhold/core";
 
 // ---- Limits (bytes/characters) ----
 export const LIMITS = {

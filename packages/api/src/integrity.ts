@@ -6,8 +6,8 @@ import {
   verify as edVerify,
   type KeyObject,
 } from "node:crypto";
-import type { AuditIntegrity, AuditRecord } from "@agentguard/core";
-import { canonicalJson, sha256Hex } from "@agentguard/core";
+import type { AuditIntegrity, AuditRecord } from "@signhold/core";
+import { canonicalJson, sha256Hex } from "@signhold/core";
 
 export const GENESIS_HASH = "0".repeat(64);
 export const HASH_ALG = "sha256-v1";

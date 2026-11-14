@@ -1,6 +1,6 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AuditIntegrity, AuditRecord } from "@agentguard/core";
+import type { AuditIntegrity, AuditRecord } from "@signhold/core";
 import { sealRecord, type AuditSigner } from "./integrity.js";
 import { reviveAuditRecord, stringifyWithBigints } from "./serialization.js";
 import type { AuditListQuery, AuditPage, AuditStore } from "./types.js";

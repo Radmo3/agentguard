@@ -1,18 +1,18 @@
-import type { ApprovalStatus, Decision } from "@agentguard/core";
+import type { ApprovalStatus, Decision } from "@signhold/core";
 
-export class AgentGuardClientError extends Error {
+export class SignholdClientError extends Error {
   constructor(message: string, public readonly code: string, public readonly cause?: unknown) {
     super(message);
-    this.name = "AgentGuardClientError";
+    this.name = "SignholdClientError";
   }
 }
 
 /** Server replied with a non-2xx status. */
-export class AgentGuardHttpError extends AgentGuardClientError {
+export class SignholdHttpError extends SignholdClientError {
   constructor(
     public readonly status: number,
     public readonly body: unknown,
-    message = `AgentGuard API responded with HTTP ${status}`,
+    message = `Signhold API responded with HTTP ${status}`,
   ) {
     super(
       message,
@@ -23,38 +23,38 @@ export class AgentGuardHttpError extends AgentGuardClientError {
       : status >= 500 ? "server_error"
       : "http_error",
     );
-    this.name = "AgentGuardHttpError";
+    this.name = "SignholdHttpError";
   }
 }
 
 /** Request timed out or could not reach the server after all retries. */
-export class AgentGuardNetworkError extends AgentGuardClientError {
+export class SignholdNetworkError extends SignholdClientError {
   constructor(message: string, cause?: unknown) {
     super(message, "network_error", cause);
-    this.name = "AgentGuardNetworkError";
+    this.name = "SignholdNetworkError";
   }
 }
 
-export class AgentGuardTimeoutError extends AgentGuardNetworkError {
+export class SignholdTimeoutError extends SignholdNetworkError {
   constructor(timeoutMs: number) {
-    super(`AgentGuard request timed out after ${timeoutMs}ms`);
-    this.name = "AgentGuardTimeoutError";
+    super(`Signhold request timed out after ${timeoutMs}ms`);
+    this.name = "SignholdTimeoutError";
     (this as { code: string }).code = "timeout";
   }
 }
 
-/** Server replied 2xx but the body is not a well-formed AgentGuard response. Treated as a failed check. */
-export class AgentGuardProtocolError extends AgentGuardClientError {
+/** Server replied 2xx but the body is not a well-formed Signhold response. Treated as a failed check. */
+export class SignholdProtocolError extends SignholdClientError {
   constructor(message: string) {
     super(message, "protocol_error");
-    this.name = "AgentGuardProtocolError";
+    this.name = "SignholdProtocolError";
   }
 }
 
 /** Thrown by `guard()` when the policy decision is `block`. */
-export class GuardBlockedError extends AgentGuardClientError {
+export class GuardBlockedError extends SignholdClientError {
   constructor(public readonly decision: Decision, public readonly auditId: string) {
-    super(`Transaction ${decision.intentId} blocked by AgentGuard: ${decision.explanation}`, "blocked");
+    super(`Transaction ${decision.intentId} blocked by Signhold: ${decision.explanation}`, "blocked");
     this.name = "GuardBlockedError";
   }
 }
@@ -65,7 +65,7 @@ export class GuardBlockedError extends AgentGuardClientError {
  * `auditId` (to look the decision up) and `challenge` (what a registered approver
  * device signs). The agent process cannot act on either.
  */
-export class GuardEscalatedError extends AgentGuardClientError {
+export class GuardEscalatedError extends SignholdClientError {
   readonly challenge: string | undefined;
   readonly approvalExpiresAt: string | undefined;
   constructor(
@@ -82,7 +82,7 @@ export class GuardEscalatedError extends AgentGuardClientError {
 }
 
 /** `waitForApproval` gave up before the server reported `approved`. The transaction must not proceed. */
-export class ApprovalTimeoutError extends AgentGuardClientError {
+export class ApprovalTimeoutError extends SignholdClientError {
   constructor(public readonly auditId: string, public readonly timeoutMs: number, public readonly lastStatus: ApprovalStatus | undefined) {
     super(`approval for audit ${auditId} not granted within ${timeoutMs}ms (last status: ${lastStatus ?? "none"})`, "approval_timeout");
     this.name = "ApprovalTimeoutError";
@@ -90,7 +90,7 @@ export class ApprovalTimeoutError extends AgentGuardClientError {
 }
 
 /** The server reported a terminal non-approved status (`expired`, `rejected`, `unknown`). A fresh check is required. */
-export class ApprovalDeniedError extends AgentGuardClientError {
+export class ApprovalDeniedError extends SignholdClientError {
   constructor(public readonly auditId: string, public readonly status: ApprovalStatus) {
     super(`approval for audit ${auditId} is ${status}; a new check is required`, "approval_denied");
     this.name = "ApprovalDeniedError";

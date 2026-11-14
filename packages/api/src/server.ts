@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { LogController, type FastifyBaseLogger, type FastifyInstance, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
-import type { ApprovalStatusResponse, AuditPrincipal, AuditRecord, ChainAdapter, CheckResponse, Decision, SimulationResult } from "@agentguard/core";
-import { computeApprovalChallenge, nowIso } from "@agentguard/core";
+import type { ApprovalStatusResponse, AuditPrincipal, AuditRecord, ChainAdapter, CheckResponse, Decision, SimulationResult } from "@signhold/core";
+import { computeApprovalChallenge, nowIso } from "@signhold/core";
 import { ApproverRegistry, DEFAULT_APPROVAL_CLOCK_SKEW_MS, PendingApprovalStore, verifyApprovalSubmission, type ApprovalRejectionReason } from "./approvals.js";
 import { ApiKeyring, NonceCache, type SignatureInput } from "./auth.js";
 import { AdapterUnavailableError, CircuitBreakerAdapter } from "./breaker.js";
@@ -66,7 +66,7 @@ function failClosedDecision(
     verdict: "escalate",
     findings: [{ ruleId, kind: "custom", verdict: "escalate", message }],
     riskScore: 100,
-    explanation: `Escalated because AgentGuard could not complete the check: ${message}`,
+    explanation: `Escalated because Signhold could not complete the check: ${message}`,
     simulation,
     policyId: policy?.id ?? "unknown",
     policyVersion: policy?.version ?? 0,
@@ -108,7 +108,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 
   const keyring = new ApiKeyring(opts.apiKeys ?? []);
   if (keyring.size === 0 && isProd) {
-    throw new Error("refusing to start in production without API keys (set AGENTGUARD_API_KEYS)");
+    throw new Error("refusing to start in production without API keys (set SIGNHOLD_API_KEYS)");
   }
 
   const loggerOpt = opts.logger ?? true;
@@ -129,7 +129,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     requestIdHeader: false, // never trust a client-supplied request id
   });
 
-  if (keyring.size === 0) app.log.warn("AGENTGUARD_API_KEYS is not set: API key authentication is DISABLED");
+  if (keyring.size === 0) app.log.warn("SIGNHOLD_API_KEYS is not set: API key authentication is DISABLED");
 
   // ---- Human approval of escalations (I-HITL) ----
   // Approver keys are the only thing that can turn `escalate` into an approval, and
@@ -143,7 +143,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   const approvalsNow = opts.approvals?.now ?? Date.now;
   const approvalClockSkewMs = opts.approvals?.clockSkewMs ?? DEFAULT_APPROVAL_CLOCK_SKEW_MS;
   if (approvers.size > 0) app.log.info({ approverKeyIds: approvers.ids, ttlMs: pendingApprovals.ttlMs }, "human approval enabled: escalations carry a challenge for registered approver keys");
-  else app.log.warn("AGENTGUARD_APPROVER_KEYS is not set: escalated transactions cannot be approved through the API");
+  else app.log.warn("SIGNHOLD_APPROVER_KEYS is not set: escalated transactions cannot be approved through the API");
 
   // ---- Adapters wrapped in circuit breakers ----
   const adapters: Partial<Record<string, ChainAdapter>> = {};
@@ -238,15 +238,15 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   const nonces = new NonceCache(signingWindow, opts.signing?.nonceCacheSize);
   app.addHook("preValidation", async (req, reply) => {
     if (keyring.size === 0 || req.url === "/healthz") return;
-    const sig = headerValue(req, "x-agentguard-signature");
-    const ts = headerValue(req, "x-agentguard-timestamp");
-    const nonce = headerValue(req, "x-agentguard-nonce");
+    const sig = headerValue(req, "x-signhold-signature");
+    const ts = headerValue(req, "x-signhold-timestamp");
+    const nonce = headerValue(req, "x-signhold-nonce");
     const reject = (message: string) => reply.code(401).send({ error: "invalid_signature", message, requestId: req.id });
     if (!sig && !ts && !nonce) {
       if (opts.signing?.required) return reject("request signature required");
       return;
     }
-    if (!sig || !ts || !nonce) return reject("x-agentguard-signature, x-agentguard-timestamp and x-agentguard-nonce are all required");
+    if (!sig || !ts || !nonce) return reject("x-signhold-signature, x-signhold-timestamp and x-signhold-nonce are all required");
     if (!/^\d{1,16}$/.test(ts)) return reject("invalid timestamp");
     if (!/^[A-Za-z0-9_-]{8,128}$/.test(nonce)) return reject("invalid nonce");
     const skew = Math.abs(Date.now() - Number(ts));
@@ -273,7 +273,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
         reply.header("access-control-allow-origin", origin);
         reply.header("vary", "origin");
         reply.header("access-control-allow-methods", "GET, POST, OPTIONS");
-        reply.header("access-control-allow-headers", "content-type, x-api-key, x-agentguard-signature, x-agentguard-timestamp, x-agentguard-nonce");
+        reply.header("access-control-allow-headers", "content-type, x-api-key, x-signhold-signature, x-signhold-timestamp, x-signhold-nonce");
         reply.header("access-control-max-age", "600");
       }
     }
@@ -427,7 +427,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
         verdict: "escalate",
         riskScore: Math.max(decision.riskScore, 50),
         findings: [...preFailures.map((f) => ({ ruleId: f.ruleId, kind: "custom" as const, verdict: "escalate" as const, message: f.message })), ...decision.findings],
-        explanation: `Escalated because AgentGuard could not complete the check: ${preFailures.map((f) => f.message).join("; ")}. ${decision.explanation}`,
+        explanation: `Escalated because Signhold could not complete the check: ${preFailures.map((f) => f.message).join("; ")}. ${decision.explanation}`,
       };
     }
 

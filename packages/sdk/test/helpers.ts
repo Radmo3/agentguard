@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { Decision } from "@agentguard/core";
+import type { Decision } from "@signhold/core";
 import type { FetchLike } from "../src/client.js";
 
 export function decisionJson(verdict: Decision["verdict"], intentId = "intent-1") {

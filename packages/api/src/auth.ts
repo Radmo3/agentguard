@@ -1,5 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { sha256Hex } from "@agentguard/core";
+import { sha256Hex } from "@signhold/core";
 
 /** API key configuration. Raw keys are hashed immediately and never retained. */
 export interface ApiKeyConfig {
@@ -25,7 +25,7 @@ export function fingerprint(secret: string): string {
 }
 
 /**
- * Parse `AGENTGUARD_API_KEYS`: comma-separated entries of either `<key>` or
+ * Parse `SIGNHOLD_API_KEYS`: comma-separated entries of either `<key>` or
  * `<id>:<key>`. An id is only recognised when it matches [A-Za-z0-9_.-]{1,64}
  * and is followed by a non-empty key; otherwise the whole entry is the key and
  * the id is derived from its fingerprint.

@@ -1,10 +1,10 @@
-import type { PolicyRule, RuleFinding, SimulationResult, TransactionIntent, Verdict } from "@agentguard/core";
+import type { PolicyRule, RuleFinding, SimulationResult, TransactionIntent, Verdict } from "@signhold/core";
 import type { ReputationService } from "./service.js";
 import type { AggregatedReputation, ReputationVerdict } from "./types.js";
 
 /**
  * Structural subset of the policy engine's `RuleInput`. Declared locally (not imported
- * from @agentguard/policy) so this package has no dependency on the engine; a
+ * from @signhold/policy) so this package has no dependency on the engine; a
  * `ReputationRuleFn` is assignable to the engine's `CustomRuleFn`.
  */
 export interface ReputationRuleInput {

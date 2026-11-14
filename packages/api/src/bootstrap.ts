@@ -2,7 +2,7 @@
 // workspaces and may be absent; everything is loaded dynamically so that this
 // package typechecks on its own.
 import { readFile } from "node:fs/promises";
-import type { Chain, ChainAdapter, PolicyRule, PolicySet } from "@agentguard/core";
+import type { Chain, ChainAdapter, PolicyRule, PolicySet } from "@signhold/core";
 import type { BehaviorIntegration, BehaviorModuleLike, CustomRuleLike, PolicyEngineLike, ReputationServiceLike } from "./types.js";
 
 export interface BootstrapResult {
@@ -10,14 +10,14 @@ export interface BootstrapResult {
   adapters: Partial<Record<Chain, ChainAdapter>>;
   policies: Map<string, PolicySet>;
   defaultPolicyId: string;
-  /** Present when a behavior package (`@agentguard/behavior`, separately licensed) is installed. */
+  /** Present when a behavior package (`@signhold/behavior`, separately licensed) is installed. */
   behavior?: BehaviorIntegration;
-  /** Present when `@agentguard/reputation` is installed. */
+  /** Present when `@signhold/reputation` is installed. */
   reputation?: ReputationServiceLike;
 }
 
 export interface BootstrapEnv {
-  /** Path to a policy JSON file validated by `@agentguard/policy`'s `loadPolicy`; falls back to the conservative default. */
+  /** Path to a policy JSON file validated by `@signhold/policy`'s `loadPolicy`; falls back to the conservative default. */
   policyPath?: string;
   evmRpcUrl?: string;
   solanaRpcUrl?: string;
@@ -28,17 +28,17 @@ export interface BootstrapEnv {
   knownEvmContracts?: string[];
   knownSolanaPrograms?: string[];
   /**
-   * JSONL file for behavioral profiles (`@agentguard/behavior`, an optional package that
+   * JSONL file for behavioral profiles (`@signhold/behavior`, an optional package that
    * is not part of this repository). Unset => in-memory profiles (lost on restart).
    * Set to `false` to disable the behavior layer entirely.
    */
   profilePath?: string | false;
   /**
-   * Module specifier of the behavior package to load. Defaults to `@agentguard/behavior`.
+   * Module specifier of the behavior package to load. Defaults to `@signhold/behavior`.
    * The module must export `createBehaviorIntegration` (see `BehaviorModuleLike`).
    */
   behaviorModule?: string;
-  /** Allow/deny list files for `@agentguard/reputation`'s StaticListProvider. */
+  /** Allow/deny list files for `@signhold/reputation`'s StaticListProvider. */
   reputationAllowlistFiles?: string[];
   reputationDenylistFiles?: string[];
   /**
@@ -79,7 +79,7 @@ interface ReputationModule {
 }
 
 /** Default module specifier of the (optional, separately licensed) behavior package. */
-export const BEHAVIOR_PACKAGE = "@agentguard/behavior";
+export const BEHAVIOR_PACKAGE = "@signhold/behavior";
 
 /** Rules appended to the default policy when the corresponding layer is active. */
 export const BEHAVIOR_RULE: PolicyRule = {
@@ -133,7 +133,7 @@ async function tryImport<T>(specifier: string): Promise<T | undefined> {
 
 function missing(pkg: string, hint: string): never {
   throw new Error(
-    `AgentGuard bootstrap: package '${pkg}' is not installed or not built. ${hint} ` +
+    `Signhold bootstrap: package '${pkg}' is not installed or not built. ${hint} ` +
       `(run \`npm run build\` from the repo root, or inject your own implementation via createServer()).`,
   );
 }
@@ -141,8 +141,8 @@ function missing(pkg: string, hint: string): never {
 export async function bootstrap(env: BootstrapEnv = {}): Promise<BootstrapResult> {
   const log = env.log ?? console;
 
-  const policyMod = await tryImport<PolicyModule>("@agentguard/policy");
-  if (!policyMod) missing("@agentguard/policy", "It provides the PolicyEngine required to evaluate checks.");
+  const policyMod = await tryImport<PolicyModule>("@signhold/policy");
+  if (!policyMod) missing("@signhold/policy", "It provides the PolicyEngine required to evaluate checks.");
 
   // ---- Behavioral anomaly layer (optional, separately licensed package) ----
   // Loaded by name so this repository never depends on it. The package must export
@@ -158,25 +158,25 @@ export async function bootstrap(env: BootstrapEnv = {}): Promise<BootstrapResult
     if (!beh) {
       log.warn(`${specifier} not installed: behavioral anomaly detection disabled`);
     } else if (typeof beh.createBehaviorIntegration !== "function") {
-      throw new Error(`AgentGuard bootstrap: '${specifier}' does not export createBehaviorIntegration(); refusing to start with a half-wired behavior layer`);
+      throw new Error(`Signhold bootstrap: '${specifier}' does not export createBehaviorIntegration(); refusing to start with a half-wired behavior layer`);
     } else {
       const integration = beh.createBehaviorIntegration({ profilePath: env.profilePath || undefined });
       if (!integration || typeof integration.rule !== "function" || !integration.store || typeof integration.store.get !== "function" || typeof integration.persist !== "function") {
-        throw new Error(`AgentGuard bootstrap: '${specifier}' returned an invalid behavior integration (expected { store, rule, persist })`);
+        throw new Error(`Signhold bootstrap: '${specifier}' returned an invalid behavior integration (expected { store, rule, persist })`);
       }
       customRules.behavior = integration.rule;
       extraRules.push(BEHAVIOR_RULE);
       behavior = { store: integration.store, persist: integration.persist };
-      log.info(env.profilePath ? `behavior profiles persisted to ${env.profilePath}` : "behavior profiles are in-memory (set AGENTGUARD_PROFILE_FILE to persist)");
+      log.info(env.profilePath ? `behavior profiles persisted to ${env.profilePath}` : "behavior profiles are in-memory (set SIGNHOLD_PROFILE_FILE to persist)");
     }
   }
 
   // ---- Contract reputation layer (optional package) ----
   let reputation: ReputationServiceLike | undefined;
   if (env.reputation !== false) {
-    const rep = await tryImport<ReputationModule>("@agentguard/reputation");
+    const rep = await tryImport<ReputationModule>("@signhold/reputation");
     if (!rep) {
-      log.warn("@agentguard/reputation not installed: contract reputation checks disabled");
+      log.warn("@signhold/reputation not installed: contract reputation checks disabled");
     } else {
       const providers: unknown[] = [
         rep.StaticListProvider.fromFiles({
@@ -186,7 +186,7 @@ export async function bootstrap(env: BootstrapEnv = {}): Promise<BootstrapResult
       ];
       if (env.reputationHttpUrl) {
         const template = env.reputationHttpUrl;
-        if (!/^https?:\/\//.test(template)) throw new Error("AGENTGUARD_REPUTATION_HTTP_URL must be an http(s) URL");
+        if (!/^https?:\/\//.test(template)) throw new Error("SIGNHOLD_REPUTATION_HTTP_URL must be an http(s) URL");
         providers.push(
           new rep.HttpProvider({
             name: "http-intel",
@@ -229,8 +229,8 @@ export async function bootstrap(env: BootstrapEnv = {}): Promise<BootstrapResult
   const adapters: Partial<Record<Chain, ChainAdapter>> = {};
 
   if (env.evmRpcUrl) {
-    const evm = await tryImport<EvmModule>("@agentguard/sim-evm");
-    if (!evm) missing("@agentguard/sim-evm", "AGENTGUARD_EVM_RPC_URL is set but the EVM adapter is unavailable.");
+    const evm = await tryImport<EvmModule>("@signhold/sim-evm");
+    if (!evm) missing("@signhold/sim-evm", "SIGNHOLD_EVM_RPC_URL is set but the EVM adapter is unavailable.");
     const viem = await tryImport<ViemModule>("viem");
     if (!viem) missing("viem", "It is required to build the EVM RPC client.");
     const client = viem.createPublicClient({ transport: viem.http(env.evmRpcUrl) });
@@ -239,12 +239,12 @@ export async function bootstrap(env: BootstrapEnv = {}): Promise<BootstrapResult
       knownContracts: env.knownEvmContracts ? new Set(env.knownEvmContracts) : undefined,
     });
   } else {
-    log.warn("AGENTGUARD_EVM_RPC_URL not set: EVM checks disabled");
+    log.warn("SIGNHOLD_EVM_RPC_URL not set: EVM checks disabled");
   }
 
   if (env.solanaRpcUrl) {
-    const sol = await tryImport<SolanaModule>("@agentguard/sim-solana");
-    if (!sol) missing("@agentguard/sim-solana", "AGENTGUARD_SOLANA_RPC_URL is set but the Solana adapter is unavailable.");
+    const sol = await tryImport<SolanaModule>("@signhold/sim-solana");
+    if (!sol) missing("@signhold/sim-solana", "SIGNHOLD_SOLANA_RPC_URL is set but the Solana adapter is unavailable.");
     const web3 = await tryImport<Web3Module>("@solana/web3.js");
     if (!web3) missing("@solana/web3.js", "It is required to build the Solana RPC connection.");
     const connection = new web3.Connection(env.solanaRpcUrl, "confirmed");
@@ -253,11 +253,11 @@ export async function bootstrap(env: BootstrapEnv = {}): Promise<BootstrapResult
       knownPrograms: env.knownSolanaPrograms ? new Set(env.knownSolanaPrograms) : undefined,
     });
   } else {
-    log.warn("AGENTGUARD_SOLANA_RPC_URL not set: Solana checks disabled");
+    log.warn("SIGNHOLD_SOLANA_RPC_URL not set: Solana checks disabled");
   }
 
   if (Object.keys(adapters).length === 0) {
-    throw new Error("AgentGuard bootstrap: no chain adapters configured (set AGENTGUARD_EVM_RPC_URL and/or AGENTGUARD_SOLANA_RPC_URL)");
+    throw new Error("Signhold bootstrap: no chain adapters configured (set SIGNHOLD_EVM_RPC_URL and/or SIGNHOLD_SOLANA_RPC_URL)");
   }
 
   return { engine, adapters, policies, defaultPolicyId, behavior, reputation };

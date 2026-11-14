@@ -3,14 +3,14 @@
     "id": "GHSA-3gc7-fjrx-p6mg",
     "package": "bigint-buffer",
     "path": "@solana/web3.js -> bigint-buffer (packages/sim-solana, examples)",
-    "justification": "Buffer overflow in toBigIntLE() when called with attacker-controlled lengths. AgentGuard only passes fixed-size slices from SPL account layouts it decodes itself; no network-controlled length reaches the function. No upstream fix exists for @solana/web3.js 1.x; revisit when migrating to @solana/kit.",
+    "justification": "Buffer overflow in toBigIntLE() when called with attacker-controlled lengths. Signhold only passes fixed-size slices from SPL account layouts it decodes itself; no network-controlled length reaches the function. No upstream fix exists for @solana/web3.js 1.x; revisit when migrating to @solana/kit.",
     "owner": "security",
     "until": "2027-02-01"
   },
   {
     "id": "GHSA-mrhx-c7xc-m3w5",
     "package": "zod@3 (packages/policy only; packages/api is on zod 4.6.7)",
-    "path": "@agentguard/policy -> zod@3.x",
+    "path": "@signhold/policy -> zod@3.x",
     "justification": "Memory exhaustion when validating oversized constrained collections. Policy files are operator-supplied from disk at startup, never request input; request validation in packages/api runs on zod 4.6.7 behind a 64 KiB body limit. Action: policy package owner to upgrade to zod 4.",
     "owner": "policy",
     "until": "2026-12-31"

@@ -1,4 +1,4 @@
-import type { Chain } from "@agentguard/core";
+import type { Chain } from "@signhold/core";
 import {
   ReputationProviderError,
   type LookupOptions,

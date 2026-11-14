@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { UINT256_MAX } from "@agentguard/core";
+import { UINT256_MAX } from "@signhold/core";
 import { PolicyEngine } from "../src/index.js";
 import { AGENT, ROUTER, SHADY, USDC, context, intent, policy, rule, simulation } from "./fixtures.js";
 
